@@ -40,23 +40,6 @@ class ExplorationMapNode(Node):
         self.map_msg.info.origin.position.z = 0.0
         self.map_msg.info.origin.orientation.w = 1.0
         self.map_msg.data = [-1] * (self.width * self.height)
-        
-        # --- Log-odds occupancy backend ---
-        n = self.width * self.height
-        self.log_odds = [0.0] * n          # 0.0 = prior (unknown-ish)
-        self.touched = [False] * n         # has this cell ever been updated?
-
-        # Update magnitudes (tune later)
-        self.l_occ = 1.5                  # hit update
-        self.l_free = -0.10                # free-ray update
-
-        # Clamp to avoid extreme certainty
-        self.L_min = -5.0
-        self.L_max = 5.0
-
-        # Classification thresholds
-        self.L_occ_thresh = 1.0            # above -> occupied
-        self.L_free_thresh = -2.0          # below -> free        
 
         # Subscribe to scan
         self.scan_sub = self.create_subscription(
@@ -72,28 +55,12 @@ class ExplorationMapNode(Node):
 
         
     def publish_map(self):
-        # Convert log-odds to OccupancyGrid values
-        data = self.map_msg.data  # reuse list to avoid reallocations each time
-
-        for i in range(len(data)):
-            if not self.touched[i]:
-                data[i] = -1
-                continue
-
-            L = self.log_odds[i]
-            if L >= self.L_occ_thresh:
-                data[i] = 100
-            elif L <= self.L_free_thresh:
-                data[i] = 0
-            else:
-                # still uncertain -> treat as unknown
-                data[i] = -1
-
         self.map_msg.header.stamp = self.get_clock().now().to_msg()
         self.publisher.publish(self.map_msg)
 
 
-    def world_to_index(self, x_map: float, y_map: float):
+    def set_cell(self, x_map: float, y_map: float, value: int):
+        # Convert map coords to grid indices
         ox = self.map_msg.info.origin.position.x
         oy = self.map_msg.info.origin.position.y
         res = self.map_msg.info.resolution
@@ -102,21 +69,13 @@ class ExplorationMapNode(Node):
         gy = int((y_map - oy) / res)
 
         if gx < 0 or gx >= self.width or gy < 0 or gy >= self.height:
-            return None
+            return
 
-        return gy * self.width + gx
-
-
-    def update_cell_logodds(self, idx: int, delta: float):
-        # update + clamp
-        L = self.log_odds[idx] + delta
-        if L < self.L_min:
-            L = self.L_min
-        elif L > self.L_max:
-            L = self.L_max
-
-        self.log_odds[idx] = L
-        self.touched[idx] = True
+        idx = gy * self.width + gx
+        current = self.map_msg.data[idx]
+        if current == 100 and value == 0:
+            return  # don't erase obstacles
+        self.map_msg.data[idx] = value
         
     def scan_cb(self, scan: LaserScan):
         # Get transform map -> base_link
@@ -150,35 +109,27 @@ class ExplorationMapNode(Node):
                 angle += scan.angle_increment
                 continue
 
-        # hit point in scan frame (2D)
-        xs = r * math.cos(angle)
-        ys = r * math.sin(angle)
+            # hit point in scan frame (2D)
+            xs = r * math.cos(angle)
+            ys = r * math.sin(angle)
 
-        # occupied endpoint (compute index first)
-        xm = tx + (xs * math.cos(yaw) - ys * math.sin(yaw))
-        ym = ty + (xs * math.sin(yaw) + ys * math.cos(yaw))
-        idx_occ = self.world_to_index(xm, ym)
+            # ---- FREE SPACE CARVING ----
+            step = self.resolution  # step size along the ray
+            s = 0.0
+            while s < r:
+                xs_f = s * math.cos(angle)
+                ys_f = s * math.sin(angle)
 
-        # ---- FREE SPACE CARVING ----
-        step = self.resolution
-        s = 0.0
-        while s < (r - self.resolution):
-            xs_f = s * math.cos(angle)
-            ys_f = s * math.sin(angle)
+                xm_f = tx + (xs_f * math.cos(yaw) - ys_f * math.sin(yaw))
+                ym_f = ty + (xs_f * math.sin(yaw) + ys_f * math.cos(yaw))
 
-            # FIXED rotation (must match endpoint)
-            xm_f = tx + (xs_f * math.cos(yaw) - ys_f * math.sin(yaw))
-            ym_f = ty + (xs_f * math.sin(yaw) + ys_f * math.cos(yaw))
+                self.set_cell(xm_f, ym_f, 0)
+                s += step
 
-            idx_f = self.world_to_index(xm_f, ym_f)
-            if idx_f is not None and idx_f != idx_occ:
-                self.update_cell_logodds(idx_f, self.l_free)
-
-            s += step
-
-        # ---- OCCUPIED ENDPOINT ----
-        if idx_occ is not None:
-            self.update_cell_logodds(idx_occ, self.l_occ)
+            # ---- OCCUPIED ENDPOINT ----
+            xm = tx + (xs * math.cos(yaw) - ys * math.sin(yaw))
+            ym = ty + (xs * math.sin(yaw) + ys * math.cos(yaw))
+            self.set_cell(xm, ym, 100)
 
             angle += scan.angle_increment
             
