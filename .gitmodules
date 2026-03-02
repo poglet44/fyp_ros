@@ -1,0 +1,3 @@
+[submodule "spot_description"]
+	path = spot_description
+	url = https://github.com/bdaiinstitute/spot_description.git
