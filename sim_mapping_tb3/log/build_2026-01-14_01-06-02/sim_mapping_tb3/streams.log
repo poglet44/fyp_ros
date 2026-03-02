@@ -1,0 +1,37 @@
+[0.354s] Invoking command in '/home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3': PYTHONPATH=/home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/sim_mapping_tb3 build --build-base /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/build install --record /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/install.log --single-version-externally-managed install_data
+[0.487s] running egg_info
+[0.487s] creating build/sim_mapping_tb3/sim_mapping_tb3.egg-info
+[0.487s] writing build/sim_mapping_tb3/sim_mapping_tb3.egg-info/PKG-INFO
+[0.487s] writing dependency_links to build/sim_mapping_tb3/sim_mapping_tb3.egg-info/dependency_links.txt
+[0.487s] writing entry points to build/sim_mapping_tb3/sim_mapping_tb3.egg-info/entry_points.txt
+[0.487s] writing requirements to build/sim_mapping_tb3/sim_mapping_tb3.egg-info/requires.txt
+[0.487s] writing top-level names to build/sim_mapping_tb3/sim_mapping_tb3.egg-info/top_level.txt
+[0.488s] writing manifest file 'build/sim_mapping_tb3/sim_mapping_tb3.egg-info/SOURCES.txt'
+[0.488s] reading manifest file 'build/sim_mapping_tb3/sim_mapping_tb3.egg-info/SOURCES.txt'
+[0.489s] writing manifest file 'build/sim_mapping_tb3/sim_mapping_tb3.egg-info/SOURCES.txt'
+[0.489s] running build
+[0.489s] running build_py
+[0.489s] creating /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/build
+[0.489s] creating /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/build/lib
+[0.489s] creating /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/build/lib/sim_mapping_tb3
+[0.489s] copying sim_mapping_tb3/__init__.py -> /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/build/lib/sim_mapping_tb3
+[0.489s] running install
+[0.489s] running install_lib
+[0.489s] creating /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/lib/python3.10/site-packages/sim_mapping_tb3
+[0.489s] copying /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/build/lib/sim_mapping_tb3/__init__.py -> /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/lib/python3.10/site-packages/sim_mapping_tb3
+[0.490s] byte-compiling /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/lib/python3.10/site-packages/sim_mapping_tb3/__init__.py to __init__.cpython-310.pyc
+[0.490s] running install_data
+[0.490s] creating /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/share/ament_index
+[0.490s] creating /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/share/ament_index/resource_index
+[0.490s] creating /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/share/ament_index/resource_index/packages
+[0.490s] copying resource/sim_mapping_tb3 -> /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/share/ament_index/resource_index/packages
+[0.490s] copying package.xml -> /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/share/sim_mapping_tb3
+[0.490s] creating /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/share/sim_mapping_tb3/launch
+[0.490s] copying launch/tb3_office_cpr.launch.py -> /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/share/sim_mapping_tb3/launch
+[0.490s] copying launch/tb3_house.launch.py -> /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/share/sim_mapping_tb3/launch
+[0.490s] copying launch/tb3_test_zone.launch.py -> /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/share/sim_mapping_tb3/launch
+[0.490s] running install_egg_info
+[0.491s] Copying build/sim_mapping_tb3/sim_mapping_tb3.egg-info to /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/lib/python3.10/site-packages/sim_mapping_tb3-0.0.0-py3.10.egg-info
+[0.491s] running install_scripts
+[0.500s] writing list of installed files to '/home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/install.log'
+[0.511s] Invoked command in '/home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3' returned '0': PYTHONPATH=/home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/install/sim_mapping_tb3/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base build/sim_mapping_tb3 build --build-base /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/build install --record /home/thor-usr/Sam/fyp_ws/src/sim_mapping_tb3/build/sim_mapping_tb3/install.log --single-version-externally-managed install_data
