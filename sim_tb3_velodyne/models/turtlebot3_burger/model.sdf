@@ -99,7 +99,7 @@
       </sensor>
     </link>
 
-    <link name="velodyne">
+    <link name="base_scan">
       <inertial>
         <pose>-0.020 0 0.161 0 0 0</pose>
         <inertia>
@@ -172,7 +172,7 @@
             <remapping>~/out:=points</remapping>
           </ros>
           <output_type>sensor_msgs/PointCloud2</output_type>
-          <frame_name>velodyne</frame_name>
+          <frame_name>base_scan</frame_name>
         </plugin>
       </sensor>
     </link>
@@ -375,7 +375,7 @@
 
     <joint name="lidar_joint" type="fixed">
       <parent>base_link</parent>
-      <child>velodyne</child>
+      <child>base_scan</child>
       <pose>-0.032 0 0.171 0 0 0</pose>
       <axis>
         <xyz>0 0 1</xyz>
