@@ -20,9 +20,9 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, EnvironmentVariable
 
 
 def generate_launch_description():
@@ -36,7 +36,16 @@ def generate_launch_description():
     world = os.path.join(
         get_package_share_directory('sim_tb3_velodyne'),
         'worlds',
-        'turtlebot3_house.world'
+        'office_cpr.world'
+    )
+    
+    gazebo_model_path = SetEnvironmentVariable(
+    name='GAZEBO_MODEL_PATH',
+    value=[
+        EnvironmentVariable('GAZEBO_MODEL_PATH', default_value=''),
+        ':',
+        '/home/thor-usr/Sam/fyp_ws/src/sim_tb3_velodyne/models/world_models'
+    ]
     )
 
     gzserver_cmd = IncludeLaunchDescription(
@@ -72,6 +81,7 @@ def generate_launch_description():
     ld = LaunchDescription()
 
     # Add the commands to the launch description
+    ld.add_action(gazebo_model_path)
     ld.add_action(gzserver_cmd)
     ld.add_action(gzclient_cmd)
     ld.add_action(robot_state_publisher_cmd)
