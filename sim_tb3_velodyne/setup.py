@@ -21,6 +21,12 @@ setup(
 
         (os.path.join('share', package_name, 'urdf'),
          glob('urdf/*')),
+         
+        (os.path.join('share', package_name, 'config'),
+         glob('config/*.yaml')),
+        
+        (os.path.join('share', package_name, 'config'),
+         glob('config/*.yml')),
 
         (os.path.join('share', package_name, 'models', 'turtlebot3_burger'),
          glob('models/turtlebot3_burger/*')),
