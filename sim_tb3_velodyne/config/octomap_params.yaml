@@ -1,14 +1,14 @@
 octomap_server:
   ros__parameters:
     frame_id: odom
-    resolution: 0.05
-    sensor_model.max_range: 15.0
-    sensor_model.hit: 0.7
-    sensor_model.miss: 0.4
-    sensor_model.min: 0.12
-    sensor_model.max: 0.97
-    occupancy_min_z: 0.1
-    occupancy_max_z: 1.5
+    resolution: 0.05                   #Voxel Size
+    sensor_model.max_range: 15.0      #Sensor Range
+    sensor_model.hit: 0.75             #Occupied hit %
+    sensor_model.miss: 0.475            #Free hit %
+    sensor_model.min: 0.12            #Min Clamping %
+    sensor_model.max: 0.97            #Max Clamping %
+    occupancy_min_z: 0.1              
+    occupancy_max_z: 0.8              #Robot Clearance (m)
     pointcloud_min_z: 0.1
     pointcloud_max_z: 1.5
     filter_ground_plane: true
