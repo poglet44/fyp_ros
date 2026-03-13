@@ -39,12 +39,18 @@ def generate_launch_description():
         'office_cpr.world'
     )
     
+    pkg_share = get_package_share_directory('sim_tb3_velodyne')
+    models_path = os.path.join(pkg_share, 'models')
+    world_models_path = os.path.join(pkg_share, 'models', 'world_models')
+    
     gazebo_model_path = SetEnvironmentVariable(
     name='GAZEBO_MODEL_PATH',
     value=[
-        EnvironmentVariable('GAZEBO_MODEL_PATH', default_value=''),
+        models_path,
         ':',
-        '/home/thor-usr/Sam/fyp_ws/src/sim_tb3_velodyne/models/world_models'
+        world_models_path,
+        ':',
+        EnvironmentVariable('GAZEBO_MODEL_PATH', default_value='')
     ]
     )
 
