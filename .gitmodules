@@ -1,3 +1,6 @@
 [submodule "spot_description"]
 	path = spot_description
 	url = https://github.com/bdaiinstitute/spot_description.git
+[submodule "lidarslam_ros2"]
+	path = lidarslam_ros2
+	url = https://github.com/rsasaki0109/lidarslam_ros2
