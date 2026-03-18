@@ -10,9 +10,9 @@ def generate_launch_description():
     main_param_dir = launch.substitutions.LaunchConfiguration(
         'main_param_dir',
         default=os.path.join(
-            get_package_share_directory('lidarslam'),
-            'param',
-            'lidarslam.yaml'))
+            get_package_share_directory('sim_tb3_velodyne'),
+            'config',
+            'lidarslam_params.yaml'))
     
     rviz_param_dir = launch.substitutions.LaunchConfiguration(
         'rviz_param_dir',
