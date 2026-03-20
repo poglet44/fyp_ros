@@ -1,3 +1,7 @@
 [submodule "spot_description"]
 	path = spot_description
 	url = https://github.com/bdaiinstitute/spot_description.git
+[submodule "LIO-SAM"]
+	path = LIO-SAM
+	url = https://github.com/TixiaoShan/LIO-SAM.git
+	branch = ros2
