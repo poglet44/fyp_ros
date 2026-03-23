@@ -5,3 +5,7 @@
 	path = LIO-SAM
 	url = https://github.com/TixiaoShan/LIO-SAM.git
 	branch = ros2
+[submodule "src/velodyne_simulator"]
+	path = src/velodyne_simulator
+	url = https://bitbucket.org/DataspeedInc/velodyne_simulator.git
+	branch = ros2
