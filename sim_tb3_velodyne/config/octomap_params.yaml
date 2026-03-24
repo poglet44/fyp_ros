@@ -8,7 +8,7 @@ octomap_server:
     sensor_model.min: 0.12            #Min Clamping %
     sensor_model.max: 0.97            #Max Clamping %
     occupancy_min_z: 0.1              
-    occupancy_max_z: 0.8              #Robot Clearance (m)
+    occupancy_max_z: 1.0              #Robot Clearance (m)
     pointcloud_min_z: 0.1
     pointcloud_max_z: 1.5
     filter_ground_plane: true

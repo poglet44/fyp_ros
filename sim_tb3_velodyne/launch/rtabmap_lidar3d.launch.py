@@ -313,17 +313,17 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "expected_update_rate",
-            default_value="12.0",
+            default_value="15.0",
             description="Expected lidar frame rate. Slightly above actual is typical.",
         ),
         DeclareLaunchArgument(
             "voxel_size",
-            default_value="0.1",
+            default_value="0.05",
             description="Voxel size in meters.",
         ),
         DeclareLaunchArgument(
             "min_loop_closure_overlap",
-            default_value="0.2",
+            default_value="0.15",
             description="Minimum scan overlap ratio for loop closure.",
         ),
         DeclareLaunchArgument(
