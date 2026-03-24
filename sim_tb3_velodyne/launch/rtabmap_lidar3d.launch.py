@@ -187,7 +187,7 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
     else:
         rtabmap_remaps = remappings + [
             ("scan_cloud", lidar_topic_deskewed),
-            ("odom", odom_frame_id),
+            ("odom", "odom"),
         ]
         viz_scan_topic = "odom_filtered_input_scan"
 
@@ -215,9 +215,9 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
             executable="rtabmap_viz",
             output="screen",
             parameters=[shared_parameters, rtabmap_parameters],
-            remappings=remappings + [
+                        remappings=remappings + [
                 ("scan_cloud", viz_scan_topic),
-                ("odom", odom_topic if use_external_odom else odom_frame_id),
+                ("odom", odom_topic if use_external_odom else "odom"),
             ],
         )
     )
@@ -335,7 +335,7 @@ def generate_launch_description():
         # New odometry control
         DeclareLaunchArgument(
             "use_external_odom",
-            default_value="true",
+            default_value="false",
             description="Use external odometry topic instead of RTAB-Map ICP odometry.",
         ),
         DeclareLaunchArgument(
