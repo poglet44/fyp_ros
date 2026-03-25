@@ -104,12 +104,18 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
     grid_scan_decimation_value = LaunchConfiguration("grid_scan_decimation").perform(context)
     grid_pre_voxel_filtering_value = LaunchConfiguration("grid_pre_voxel_filtering").perform(context)
     grid_map_frame_projection_value = LaunchConfiguration("grid_map_frame_projection").perform(context)
+    grid_flat_obstacle_detected_value = LaunchConfiguration("grid_flat_obstacle_detected").perform(context)
+    grid_cluster_radius_value = LaunchConfiguration("grid_cluster_radius").perform(context)
+    grid_min_cluster_size_value = LaunchConfiguration("grid_min_cluster_size").perform(context)
+    detection_rate_value = LaunchConfiguration("detection_rate").perform(context)
+    approx_sync_value = LaunchConfiguration("approx_sync").perform(context)
+    approx_sync_value = approx_sync_value in ["true", "True"]
 
     shared_parameters = {
         "use_sim_time": use_sim_time,
         "frame_id": frame_id,
         "qos": LaunchConfiguration("qos"),
-        "approx_sync": rgbd_image_used,
+        "approx_sync": approx_sync_value,
         "wait_for_transform": 0.2,
         "Icp/PointToPlane": ParameterValue("true", value_type=str),
         "Icp/Iterations": ParameterValue(icp_iterations_value, value_type=str),
@@ -140,6 +146,9 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         "Grid/ScanDecimation": ParameterValue(grid_scan_decimation_value, value_type=str),
         "Grid/PreVoxelFiltering": ParameterValue(grid_pre_voxel_filtering_value, value_type=str),
         "Grid/MapFrameProjection": ParameterValue(grid_map_frame_projection_value, value_type=str),
+        "Grid/FlatObstacleDetected": ParameterValue(grid_flat_obstacle_detected_value, value_type=str),
+        "Grid/ClusterRadius": ParameterValue(grid_cluster_radius_value, value_type=str),
+        "Grid/MinClusterSize": ParameterValue(grid_min_cluster_size_value, value_type=str),
     }
 
     icp_odometry_parameters = {
@@ -175,6 +184,7 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         "Mem/STMSize": ParameterValue(stm_size_value, value_type=str),
         "Reg/Strategy": ParameterValue(reg_strategy_value, value_type=str),
         "Icp/CorrespondenceRatio": ParameterValue(min_loop_closure_overlap_value, value_type=str),
+        "Rtabmap/DetectionRate": ParameterValue(detection_rate_value, value_type=str),
     }
     if use_external_odom:
         rtabmap_parameters["subscribe_odom_info"] = False
@@ -387,7 +397,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "map_frame_id",
-            default_value="new_map",
+            default_value="map",
             description="Global map frame published by RTAB-Map.",
         ),
         DeclareLaunchArgument("icp_iterations", default_value="10"),
@@ -407,8 +417,8 @@ def generate_launch_description():
         DeclareLaunchArgument("proximity_by_space", default_value="false"),
         DeclareLaunchArgument("neighbor_link_refining", default_value="true"),
         DeclareLaunchArgument("optimize_from_graph_end", default_value="false"),
-        DeclareLaunchArgument("angular_update", default_value="0.05"),
-        DeclareLaunchArgument("linear_update", default_value="0.05"),
+        DeclareLaunchArgument("angular_update", default_value="0.02"),
+        DeclareLaunchArgument("linear_update", default_value="0.02"),
         DeclareLaunchArgument("create_occupancy_grid", default_value="true"),
         DeclareLaunchArgument("not_linked_nodes_kept", default_value="false"),
         DeclareLaunchArgument("stm_size", default_value="30"),
@@ -422,8 +432,8 @@ def generate_launch_description():
         DeclareLaunchArgument("grid_footprint_length", default_value="0.18"),
         DeclareLaunchArgument("grid_footprint_width", default_value="0.18"),
         DeclareLaunchArgument("grid_footprint_height", default_value="0.3"),
-        DeclareLaunchArgument("grid_normals_segmentation", default_value="false"),
-        DeclareLaunchArgument("grid_max_obstacle_height", default_value="2.0"),
+        DeclareLaunchArgument("grid_normals_segmentation", default_value="true"),
+        DeclareLaunchArgument("grid_max_obstacle_height", default_value="1.0"),
         DeclareLaunchArgument("grid_min_ground_height", default_value="-0.1"),
         DeclareLaunchArgument("grid_max_ground_height", default_value="0.1"),
         DeclareLaunchArgument("grid_max_ground_angle", default_value="45"),
@@ -431,5 +441,10 @@ def generate_launch_description():
         DeclareLaunchArgument("grid_scan_decimation", default_value="1"),
         DeclareLaunchArgument("grid_pre_voxel_filtering", default_value="true"),
         DeclareLaunchArgument("grid_map_frame_projection", default_value="false"),
+        DeclareLaunchArgument("grid_flat_obstacle_detected", default_value="true"),
+        DeclareLaunchArgument("grid_cluster_radius", default_value="0.15"),
+        DeclareLaunchArgument("grid_min_cluster_size", default_value="5"),
+        DeclareLaunchArgument("detection_rate", default_value="15.0"),
+        DeclareLaunchArgument("approx_sync", default_value="true"),
         OpaqueFunction(function=launch_setup),
     ])
