@@ -63,6 +63,7 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
     icp_point_to_plane_k_value = LaunchConfiguration("icp_point_to_plane_k").perform(context)
     icp_point_to_plane_radius_value = LaunchConfiguration("icp_point_to_plane_radius").perform(context)
     icp_max_translation_value = LaunchConfiguration("icp_max_translation").perform(context)
+    icp_max_rotation_value = LaunchConfiguration("icp_max_rotation").perform(context)
     icp_strategy_value = LaunchConfiguration("icp_strategy").perform(context)
     icp_outlier_ratio_value = LaunchConfiguration("icp_outlier_ratio").perform(context)
     icp_correspondence_ratio_value = LaunchConfiguration("icp_correspondence_ratio").perform(context)
@@ -73,12 +74,22 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
 
     proximity_max_graph_depth_value = LaunchConfiguration("proximity_max_graph_depth").perform(context)
     proximity_path_max_neighbors_value = LaunchConfiguration("proximity_path_max_neighbors").perform(context)
+    proximity_by_space_value = LaunchConfiguration("proximity_by_space").perform(context)
+    neighbor_link_refining_value = LaunchConfiguration("neighbor_link_refining").perform(context)
+    optimize_from_graph_end_value = LaunchConfiguration("optimize_from_graph_end").perform(context)
+
     angular_update_value = LaunchConfiguration("angular_update").perform(context)
     linear_update_value = LaunchConfiguration("linear_update").perform(context)
     create_occupancy_grid_value = LaunchConfiguration("create_occupancy_grid").perform(context)
     not_linked_nodes_kept_value = LaunchConfiguration("not_linked_nodes_kept").perform(context)
     stm_size_value = LaunchConfiguration("stm_size").perform(context)
     reg_strategy_value = LaunchConfiguration("reg_strategy").perform(context)
+    reg_force_3dof_value = LaunchConfiguration("reg_force_3dof").perform(context)
+
+    grid_sensor_value = LaunchConfiguration("grid_sensor").perform(context)
+    grid_range_max_value = LaunchConfiguration("grid_range_max").perform(context)
+    grid_ray_tracing_value = LaunchConfiguration("grid_ray_tracing").perform(context)
+    grid_range_min_value = LaunchConfiguration("grid_range_min").perform(context)
 
     shared_parameters = {
         "use_sim_time": use_sim_time,
@@ -93,9 +104,15 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         "Icp/PointToPlaneK": ParameterValue(icp_point_to_plane_k_value, value_type=str),
         "Icp/PointToPlaneRadius": ParameterValue(icp_point_to_plane_radius_value, value_type=str),
         "Icp/MaxTranslation": ParameterValue(icp_max_translation_value, value_type=str),
+        "Icp/MaxRotation": ParameterValue(icp_max_rotation_value, value_type=str),
         "Icp/MaxCorrespondenceDistance": ParameterValue(str(max_correspondence_distance), value_type=str),
         "Icp/Strategy": ParameterValue(icp_strategy_value, value_type=str),
         "Icp/OutlierRatio": ParameterValue(icp_outlier_ratio_value, value_type=str),
+        "Reg/Force3DoF": ParameterValue(reg_force_3dof_value, value_type=str),
+        "Grid/Sensor": ParameterValue(grid_sensor_value, value_type=str),
+        "Grid/RangeMax": ParameterValue(grid_range_max_value, value_type=str),
+        "Grid/RayTracing": ParameterValue(grid_ray_tracing_value, value_type=str),
+        "Grid/RangeMin": ParameterValue(grid_range_min_value, value_type=str),
     }
 
     icp_odometry_parameters = {
@@ -121,6 +138,9 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         "map_frame_id": LaunchConfiguration("map_frame_id"),
         "RGBD/ProximityMaxGraphDepth": ParameterValue(proximity_max_graph_depth_value, value_type=str),
         "RGBD/ProximityPathMaxNeighbors": ParameterValue(proximity_path_max_neighbors_value, value_type=str),
+        "RGBD/ProximityBySpace": ParameterValue(proximity_by_space_value, value_type=str),
+        "RGBD/NeighborLinkRefining": ParameterValue(neighbor_link_refining_value, value_type=str),
+        "RGBD/OptimizeFromGraphEnd": ParameterValue(optimize_from_graph_end_value, value_type=str),
         "RGBD/AngularUpdate": ParameterValue(angular_update_value, value_type=str),
         "RGBD/LinearUpdate": ParameterValue(linear_update_value, value_type=str),
         "RGBD/CreateOccupancyGrid": ParameterValue(create_occupancy_grid_value, value_type=str),
@@ -340,7 +360,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "map_frame_id",
-            default_value="new_map",
+            default_value="map",
             description="Global map frame published by RTAB-Map.",
         ),
         DeclareLaunchArgument("icp_iterations", default_value="10"),
@@ -348,6 +368,7 @@ def generate_launch_description():
         DeclareLaunchArgument("icp_point_to_plane_k", default_value="20"),
         DeclareLaunchArgument("icp_point_to_plane_radius", default_value="0"),
         DeclareLaunchArgument("icp_max_translation", default_value="0.2"),
+        DeclareLaunchArgument("icp_max_rotation", default_value="0.78"),
         DeclareLaunchArgument("icp_strategy", default_value="1"),
         DeclareLaunchArgument("icp_outlier_ratio", default_value="0.85"),
         DeclareLaunchArgument("icp_correspondence_ratio", default_value="0.01"),
@@ -356,11 +377,19 @@ def generate_launch_description():
         DeclareLaunchArgument("odom_bundle_adjustment", default_value="false"),
         DeclareLaunchArgument("proximity_max_graph_depth", default_value="0"),
         DeclareLaunchArgument("proximity_path_max_neighbors", default_value="0"),
+        DeclareLaunchArgument("proximity_by_space", default_value="false"),
+        DeclareLaunchArgument("neighbor_link_refining", default_value="true"),
+        DeclareLaunchArgument("optimize_from_graph_end", default_value="false"),
         DeclareLaunchArgument("angular_update", default_value="0.05"),
         DeclareLaunchArgument("linear_update", default_value="0.05"),
         DeclareLaunchArgument("create_occupancy_grid", default_value="true"),
         DeclareLaunchArgument("not_linked_nodes_kept", default_value="false"),
         DeclareLaunchArgument("stm_size", default_value="30"),
         DeclareLaunchArgument("reg_strategy", default_value="1"),
+        DeclareLaunchArgument("reg_force_3dof", default_value="false"),
+        DeclareLaunchArgument("grid_sensor", default_value="0"),
+        DeclareLaunchArgument("grid_range_max", default_value="30.0"),
+        DeclareLaunchArgument("grid_ray_tracing", default_value="true"),
+        DeclareLaunchArgument("grid_range_min", default_value="0.3"),
         OpaqueFunction(function=launch_setup),
     ])
