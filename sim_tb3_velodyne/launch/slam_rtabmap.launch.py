@@ -1,6 +1,6 @@
 from launch import LaunchDescription, LaunchContext
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -87,9 +87,23 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
     reg_force_3dof_value = LaunchConfiguration("reg_force_3dof").perform(context)
 
     grid_sensor_value = LaunchConfiguration("grid_sensor").perform(context)
+    grid_range_min_value = LaunchConfiguration("grid_range_min").perform(context)
     grid_range_max_value = LaunchConfiguration("grid_range_max").perform(context)
     grid_ray_tracing_value = LaunchConfiguration("grid_ray_tracing").perform(context)
-    grid_range_min_value = LaunchConfiguration("grid_range_min").perform(context)
+
+    grid_cell_size_value = LaunchConfiguration("grid_cell_size").perform(context)
+    grid_footprint_length_value = LaunchConfiguration("grid_footprint_length").perform(context)
+    grid_footprint_width_value = LaunchConfiguration("grid_footprint_width").perform(context)
+    grid_footprint_height_value = LaunchConfiguration("grid_footprint_height").perform(context)
+    grid_normals_segmentation_value = LaunchConfiguration("grid_normals_segmentation").perform(context)
+    grid_max_obstacle_height_value = LaunchConfiguration("grid_max_obstacle_height").perform(context)
+    grid_min_ground_height_value = LaunchConfiguration("grid_min_ground_height").perform(context)
+    grid_max_ground_height_value = LaunchConfiguration("grid_max_ground_height").perform(context)
+    grid_max_ground_angle_value = LaunchConfiguration("grid_max_ground_angle").perform(context)
+    grid_normal_k_value = LaunchConfiguration("grid_normal_k").perform(context)
+    grid_scan_decimation_value = LaunchConfiguration("grid_scan_decimation").perform(context)
+    grid_pre_voxel_filtering_value = LaunchConfiguration("grid_pre_voxel_filtering").perform(context)
+    grid_map_frame_projection_value = LaunchConfiguration("grid_map_frame_projection").perform(context)
 
     shared_parameters = {
         "use_sim_time": use_sim_time,
@@ -110,9 +124,22 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         "Icp/OutlierRatio": ParameterValue(icp_outlier_ratio_value, value_type=str),
         "Reg/Force3DoF": ParameterValue(reg_force_3dof_value, value_type=str),
         "Grid/Sensor": ParameterValue(grid_sensor_value, value_type=str),
+        "Grid/RangeMin": ParameterValue(grid_range_min_value, value_type=str),
         "Grid/RangeMax": ParameterValue(grid_range_max_value, value_type=str),
         "Grid/RayTracing": ParameterValue(grid_ray_tracing_value, value_type=str),
-        "Grid/RangeMin": ParameterValue(grid_range_min_value, value_type=str),
+        "Grid/CellSize": ParameterValue(grid_cell_size_value, value_type=str),
+        "Grid/FootprintLength": ParameterValue(grid_footprint_length_value, value_type=str),
+        "Grid/FootprintWidth": ParameterValue(grid_footprint_width_value, value_type=str),
+        "Grid/FootprintHeight": ParameterValue(grid_footprint_height_value, value_type=str),
+        "Grid/NormalsSegmentation": ParameterValue(grid_normals_segmentation_value, value_type=str),
+        "Grid/MaxObstacleHeight": ParameterValue(grid_max_obstacle_height_value, value_type=str),
+        "Grid/MinGroundHeight": ParameterValue(grid_min_ground_height_value, value_type=str),
+        "Grid/MaxGroundHeight": ParameterValue(grid_max_ground_height_value, value_type=str),
+        "Grid/MaxGroundAngle": ParameterValue(grid_max_ground_angle_value, value_type=str),
+        "Grid/NormalK": ParameterValue(grid_normal_k_value, value_type=str),
+        "Grid/ScanDecimation": ParameterValue(grid_scan_decimation_value, value_type=str),
+        "Grid/PreVoxelFiltering": ParameterValue(grid_pre_voxel_filtering_value, value_type=str),
+        "Grid/MapFrameProjection": ParameterValue(grid_map_frame_projection_value, value_type=str),
     }
 
     icp_odometry_parameters = {
@@ -360,7 +387,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "map_frame_id",
-            default_value="map",
+            default_value="new_map",
             description="Global map frame published by RTAB-Map.",
         ),
         DeclareLaunchArgument("icp_iterations", default_value="10"),
@@ -386,10 +413,23 @@ def generate_launch_description():
         DeclareLaunchArgument("not_linked_nodes_kept", default_value="false"),
         DeclareLaunchArgument("stm_size", default_value="30"),
         DeclareLaunchArgument("reg_strategy", default_value="1"),
-        DeclareLaunchArgument("reg_force_3dof", default_value="false"),
+        DeclareLaunchArgument("reg_force_3dof", default_value="true"),
         DeclareLaunchArgument("grid_sensor", default_value="0"),
-        DeclareLaunchArgument("grid_range_max", default_value="30.0"),
-        DeclareLaunchArgument("grid_ray_tracing", default_value="true"),
         DeclareLaunchArgument("grid_range_min", default_value="0.3"),
+        DeclareLaunchArgument("grid_range_max", default_value="0"),
+        DeclareLaunchArgument("grid_ray_tracing", default_value="true"),
+        DeclareLaunchArgument("grid_cell_size", default_value="0.05"),
+        DeclareLaunchArgument("grid_footprint_length", default_value="0.18"),
+        DeclareLaunchArgument("grid_footprint_width", default_value="0.18"),
+        DeclareLaunchArgument("grid_footprint_height", default_value="0.3"),
+        DeclareLaunchArgument("grid_normals_segmentation", default_value="false"),
+        DeclareLaunchArgument("grid_max_obstacle_height", default_value="2.0"),
+        DeclareLaunchArgument("grid_min_ground_height", default_value="-0.1"),
+        DeclareLaunchArgument("grid_max_ground_height", default_value="0.1"),
+        DeclareLaunchArgument("grid_max_ground_angle", default_value="45"),
+        DeclareLaunchArgument("grid_normal_k", default_value="20"),
+        DeclareLaunchArgument("grid_scan_decimation", default_value="1"),
+        DeclareLaunchArgument("grid_pre_voxel_filtering", default_value="true"),
+        DeclareLaunchArgument("grid_map_frame_projection", default_value="false"),
         OpaqueFunction(function=launch_setup),
     ])
