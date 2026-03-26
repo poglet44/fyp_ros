@@ -109,6 +109,26 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
     grid_min_cluster_size_value = LaunchConfiguration("grid_min_cluster_size").perform(context)
     detection_rate_value = LaunchConfiguration("detection_rate").perform(context)
     approx_sync_value = LaunchConfiguration("approx_sync").perform(context)
+    
+    grid_ground_is_obstacle_value = LaunchConfiguration("grid_ground_is_obstacle").perform(context)
+    grid_noise_filtering_radius_value = LaunchConfiguration("grid_noise_filtering_radius").perform(context)
+    grid_noise_filtering_min_neighbors_value = LaunchConfiguration("grid_noise_filtering_min_neighbors").perform(context)
+    grid_scan2d_unknown_space_filled_value = LaunchConfiguration("grid_scan2d_unknown_space_filled").perform(context)
+
+    grid_global_update_error_value = LaunchConfiguration("grid_global_update_error").perform(context)
+    grid_global_footprint_radius_value = LaunchConfiguration("grid_global_footprint_radius").perform(context)
+    grid_global_min_size_value = LaunchConfiguration("grid_global_min_size").perform(context)
+    grid_global_eroded_value = LaunchConfiguration("grid_global_eroded").perform(context)
+    grid_global_max_nodes_value = LaunchConfiguration("grid_global_max_nodes").perform(context)
+    grid_global_altitude_delta_value = LaunchConfiguration("grid_global_altitude_delta").perform(context)
+    grid_global_occupancy_thr_value = LaunchConfiguration("grid_global_occupancy_thr").perform(context)
+    grid_global_prob_hit_value = LaunchConfiguration("grid_global_prob_hit").perform(context)
+    grid_global_prob_miss_value = LaunchConfiguration("grid_global_prob_miss").perform(context)
+    grid_global_prob_clamping_min_value = LaunchConfiguration("grid_global_prob_clamping_min").perform(context)
+    grid_global_prob_clamping_max_value = LaunchConfiguration("grid_global_prob_clamping_max").perform(context)
+    grid_global_flood_fill_depth_value = LaunchConfiguration("grid_global_flood_fill_depth").perform(context)
+    grid_3d_value = LaunchConfiguration("grid_3d").perform(context)
+    
     approx_sync_value = approx_sync_value in ["true", "True"]
 
     shared_parameters = {
@@ -149,6 +169,24 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         "Grid/FlatObstacleDetected": ParameterValue(grid_flat_obstacle_detected_value, value_type=str),
         "Grid/ClusterRadius": ParameterValue(grid_cluster_radius_value, value_type=str),
         "Grid/MinClusterSize": ParameterValue(grid_min_cluster_size_value, value_type=str),
+        "Grid/GroundIsObstacle": ParameterValue(grid_ground_is_obstacle_value, value_type=str),
+        "Grid/NoiseFilteringRadius": ParameterValue(grid_noise_filtering_radius_value, value_type=str),
+        "Grid/NoiseFilteringMinNeighbors": ParameterValue(grid_noise_filtering_min_neighbors_value, value_type=str),
+        "Grid/Scan2dUnknownSpaceFilled": ParameterValue(grid_scan2d_unknown_space_filled_value, value_type=str),
+
+        "GridGlobal/UpdateError": ParameterValue(grid_global_update_error_value, value_type=str),
+        "GridGlobal/FootprintRadius": ParameterValue(grid_global_footprint_radius_value, value_type=str),
+        "GridGlobal/MinSize": ParameterValue(grid_global_min_size_value, value_type=str),
+        "GridGlobal/Eroded": ParameterValue(grid_global_eroded_value, value_type=str),
+        "GridGlobal/MaxNodes": ParameterValue(grid_global_max_nodes_value, value_type=str),
+        "GridGlobal/AltitudeDelta": ParameterValue(grid_global_altitude_delta_value, value_type=str),
+        "GridGlobal/OccupancyThr": ParameterValue(grid_global_occupancy_thr_value, value_type=str),
+        "GridGlobal/ProbHit": ParameterValue(grid_global_prob_hit_value, value_type=str),
+        "GridGlobal/ProbMiss": ParameterValue(grid_global_prob_miss_value, value_type=str),
+        "GridGlobal/ProbClampingMin": ParameterValue(grid_global_prob_clamping_min_value, value_type=str),
+        "GridGlobal/ProbClampingMax": ParameterValue(grid_global_prob_clamping_max_value, value_type=str),
+        "GridGlobal/FloodFillDepth": ParameterValue(grid_global_flood_fill_depth_value, value_type=str),
+        "Grid/3D": ParameterValue(grid_3d_value, value_type=str),
     }
 
     icp_odometry_parameters = {
@@ -423,21 +461,21 @@ def generate_launch_description():
         DeclareLaunchArgument("not_linked_nodes_kept", default_value="false"),
         DeclareLaunchArgument("stm_size", default_value="30"),
         DeclareLaunchArgument("reg_strategy", default_value="1"),
-        DeclareLaunchArgument("reg_force_3dof", default_value="true"),
+        DeclareLaunchArgument("reg_force_3dof", default_value="false"),
         DeclareLaunchArgument("grid_sensor", default_value="0"),
         DeclareLaunchArgument("grid_range_min", default_value="0.3"),
-        DeclareLaunchArgument("grid_range_max", default_value="0"),
+        DeclareLaunchArgument("grid_range_max", default_value="30"),
         DeclareLaunchArgument("grid_ray_tracing", default_value="true"),
         DeclareLaunchArgument("grid_cell_size", default_value="0.05"),
-        DeclareLaunchArgument("grid_footprint_length", default_value="0.18"),
-        DeclareLaunchArgument("grid_footprint_width", default_value="0.18"),
+        DeclareLaunchArgument("grid_footprint_length", default_value="0.25"),
+        DeclareLaunchArgument("grid_footprint_width", default_value="0.25"),
         DeclareLaunchArgument("grid_footprint_height", default_value="0.3"),
         DeclareLaunchArgument("grid_normals_segmentation", default_value="true"),
-        DeclareLaunchArgument("grid_max_obstacle_height", default_value="1.0"),
-        DeclareLaunchArgument("grid_min_ground_height", default_value="-0.1"),
-        DeclareLaunchArgument("grid_max_ground_height", default_value="0.1"),
+        DeclareLaunchArgument("grid_max_obstacle_height", default_value="1.1"),
+        DeclareLaunchArgument("grid_min_ground_height", default_value="-0.01"),
+        DeclareLaunchArgument("grid_max_ground_height", default_value="0.01"),
         DeclareLaunchArgument("grid_max_ground_angle", default_value="45"),
-        DeclareLaunchArgument("grid_normal_k", default_value="20"),
+        DeclareLaunchArgument("grid_normal_k", default_value="10"),
         DeclareLaunchArgument("grid_scan_decimation", default_value="1"),
         DeclareLaunchArgument("grid_pre_voxel_filtering", default_value="true"),
         DeclareLaunchArgument("grid_map_frame_projection", default_value="false"),
@@ -446,5 +484,23 @@ def generate_launch_description():
         DeclareLaunchArgument("grid_min_cluster_size", default_value="5"),
         DeclareLaunchArgument("detection_rate", default_value="15.0"),
         DeclareLaunchArgument("approx_sync", default_value="true"),
+        DeclareLaunchArgument("grid_ground_is_obstacle", default_value="false"),
+        DeclareLaunchArgument("grid_noise_filtering_radius", default_value="0.0"),
+        DeclareLaunchArgument("grid_noise_filtering_min_neighbors", default_value="5"),
+        DeclareLaunchArgument("grid_scan2d_unknown_space_filled", default_value="false"),
+
+        DeclareLaunchArgument("grid_global_update_error", default_value="0.01"),
+        DeclareLaunchArgument("grid_global_footprint_radius", default_value="0.0"),
+        DeclareLaunchArgument("grid_global_min_size", default_value="0.0"),
+        DeclareLaunchArgument("grid_global_eroded", default_value="false"),
+        DeclareLaunchArgument("grid_global_max_nodes", default_value="0"),
+        DeclareLaunchArgument("grid_global_altitude_delta", default_value="0"),
+        DeclareLaunchArgument("grid_global_occupancy_thr", default_value="0.15"),
+        DeclareLaunchArgument("grid_global_prob_hit", default_value="0.95"),
+        DeclareLaunchArgument("grid_global_prob_miss", default_value="0.2"),
+        DeclareLaunchArgument("grid_global_prob_clamping_min", default_value="0.1192"),
+        DeclareLaunchArgument("grid_global_prob_clamping_max", default_value="0.971"),
+        DeclareLaunchArgument("grid_global_flood_fill_depth", default_value="0"),
+        DeclareLaunchArgument("grid_3d", default_value="true"),
         OpaqueFunction(function=launch_setup),
     ])
