@@ -1,6 +1,6 @@
 octomap_server:
   ros__parameters:
-    frame_id: new_map
+    frame_id: map
     resolution: 0.05                   #Voxel Size
     sensor_model.max_range: 15.0      #Sensor Range
     sensor_model.hit: 0.75             #Occupied hit %
