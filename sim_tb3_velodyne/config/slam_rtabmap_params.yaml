@@ -1,0 +1,177 @@
+icp_odometry:
+  ros__parameters:
+    qos: 2
+    wait_for_transform: 0.2
+
+    Icp/PointToPlane: "true"
+    Icp/Iterations: "10"
+    Icp/VoxelSize: "0.05"
+    Icp/Epsilon: "0.001"
+    Icp/PointToPlaneK: "20"
+    Icp/PointToPlaneRadius: "0"
+    Icp/MaxTranslation: "0.2"
+    Icp/MaxRotation: "0.78"
+    Icp/Strategy: "1"
+    Icp/OutlierRatio: "0.85"
+    Icp/CorrespondenceRatio: "0.01"
+
+    Odom/ScanKeyFrameThr: "0.4"
+    OdomF2M/ScanSubtractRadius: "0.05"
+    OdomF2M/ScanMaxSize: "15000"
+    OdomF2M/BundleAdjustment: "false"
+
+rtabmap:
+  ros__parameters:
+    qos: 2
+    wait_for_transform: 0.2
+
+    subscribe_depth: false
+    subscribe_rgb: false
+    subscribe_scan_cloud: true
+
+    RGBD/ProximityMaxGraphDepth: "0"
+    RGBD/ProximityPathMaxNeighbors: "0"
+    RGBD/ProximityBySpace: "false"
+    RGBD/NeighborLinkRefining: "true"
+    RGBD/OptimizeFromGraphEnd: "false"
+    RGBD/AngularUpdate: "0.02"
+    RGBD/LinearUpdate: "0.02"
+    RGBD/CreateOccupancyGrid: "true"
+
+    Mem/NotLinkedNodesKept: "false"
+    Mem/STMSize: "30"
+
+    Reg/Strategy: "1"
+    Reg/Force3DoF: "false"
+
+    Icp/PointToPlane: "true"
+    Icp/Iterations: "10"
+    Icp/VoxelSize: "0.05"
+    Icp/Epsilon: "0.001"
+    Icp/PointToPlaneK: "20"
+    Icp/PointToPlaneRadius: "0"
+    Icp/MaxTranslation: "0.2"
+    Icp/MaxRotation: "0.78"
+    Icp/MaxCorrespondenceDistance: "0.5"
+    Icp/Strategy: "1"
+    Icp/OutlierRatio: "0.85"
+    Icp/CorrespondenceRatio: "0.15"
+
+    Rtabmap/DetectionRate: "15.0"
+
+    Grid/Sensor: "0"
+    Grid/RangeMin: "0.3"
+    Grid/RangeMax: "30"
+    Grid/RayTracing: "true"
+    Grid/CellSize: "0.05"
+    Grid/FootprintLength: "0.25"
+    Grid/FootprintWidth: "0.25"
+    Grid/FootprintHeight: "0.3"
+    Grid/NormalsSegmentation: "true"
+    Grid/MaxObstacleHeight: "1.1"
+    Grid/MinGroundHeight: "-0.01"
+    Grid/MaxGroundHeight: "0.01"
+    Grid/MaxGroundAngle: "45"
+    Grid/NormalK: "10"
+    Grid/ScanDecimation: "1"
+    Grid/PreVoxelFiltering: "true"
+    Grid/MapFrameProjection: "false"
+    Grid/FlatObstacleDetected: "true"
+    Grid/ClusterRadius: "0.15"
+    Grid/MinClusterSize: "5"
+    Grid/GroundIsObstacle: "false"
+    Grid/NoiseFilteringRadius: "0.0"
+    Grid/NoiseFilteringMinNeighbors: "5"
+    Grid/Scan2dUnknownSpaceFilled: "false"
+    Grid/3D: "true"
+
+    GridGlobal/UpdateError: "0.01"
+    GridGlobal/FootprintRadius: "0.0"
+    GridGlobal/MinSize: "0.0"
+    GridGlobal/Eroded: "false"
+    GridGlobal/MaxNodes: "0"
+    GridGlobal/AltitudeDelta: "0"
+    GridGlobal/OccupancyThr: "0.15"
+    GridGlobal/ProbHit: "0.95"
+    GridGlobal/ProbMiss: "0.2"
+    GridGlobal/ProbClampingMin: "0.1192"
+    GridGlobal/ProbClampingMax: "0.971"
+    GridGlobal/FloodFillDepth: "0"
+
+rtabmap_viz:
+  ros__parameters:
+    qos: 2
+    wait_for_transform: 0.2
+
+    subscribe_depth: false
+    subscribe_rgb: false
+    subscribe_scan_cloud: true
+
+    RGBD/ProximityMaxGraphDepth: "0"
+    RGBD/ProximityPathMaxNeighbors: "0"
+    RGBD/ProximityBySpace: "false"
+    RGBD/NeighborLinkRefining: "true"
+    RGBD/OptimizeFromGraphEnd: "false"
+    RGBD/AngularUpdate: "0.02"
+    RGBD/LinearUpdate: "0.02"
+    RGBD/CreateOccupancyGrid: "true"
+
+    Mem/NotLinkedNodesKept: "false"
+    Mem/STMSize: "30"
+
+    Reg/Strategy: "1"
+    Reg/Force3DoF: "false"
+
+    Icp/PointToPlane: "true"
+    Icp/Iterations: "10"
+    Icp/VoxelSize: "0.05"
+    Icp/Epsilon: "0.001"
+    Icp/PointToPlaneK: "20"
+    Icp/PointToPlaneRadius: "0"
+    Icp/MaxTranslation: "0.2"
+    Icp/MaxRotation: "0.78"
+    Icp/MaxCorrespondenceDistance: "0.5"
+    Icp/Strategy: "1"
+    Icp/OutlierRatio: "0.85"
+    Icp/CorrespondenceRatio: "0.15"
+
+    Rtabmap/DetectionRate: "15.0"
+
+    Grid/Sensor: "0"
+    Grid/RangeMin: "0.3"
+    Grid/RangeMax: "30"
+    Grid/RayTracing: "true"
+    Grid/CellSize: "0.05"
+    Grid/FootprintLength: "0.25"
+    Grid/FootprintWidth: "0.25"
+    Grid/FootprintHeight: "0.3"
+    Grid/NormalsSegmentation: "true"
+    Grid/MaxObstacleHeight: "1.1"
+    Grid/MinGroundHeight: "-0.01"
+    Grid/MaxGroundHeight: "0.01"
+    Grid/MaxGroundAngle: "45"
+    Grid/NormalK: "10"
+    Grid/ScanDecimation: "1"
+    Grid/PreVoxelFiltering: "true"
+    Grid/MapFrameProjection: "false"
+    Grid/FlatObstacleDetected: "true"
+    Grid/ClusterRadius: "0.15"
+    Grid/MinClusterSize: "5"
+    Grid/GroundIsObstacle: "false"
+    Grid/NoiseFilteringRadius: "0.0"
+    Grid/NoiseFilteringMinNeighbors: "5"
+    Grid/Scan2dUnknownSpaceFilled: "false"
+    Grid/3D: "true"
+
+    GridGlobal/UpdateError: "0.01"
+    GridGlobal/FootprintRadius: "0.0"
+    GridGlobal/MinSize: "0.0"
+    GridGlobal/Eroded: "false"
+    GridGlobal/MaxNodes: "0"
+    GridGlobal/AltitudeDelta: "0"
+    GridGlobal/OccupancyThr: "0.15"
+    GridGlobal/ProbHit: "0.95"
+    GridGlobal/ProbMiss: "0.2"
+    GridGlobal/ProbClampingMin: "0.1192"
+    GridGlobal/ProbClampingMax: "0.971"
+    GridGlobal/FloodFillDepth: "0"
