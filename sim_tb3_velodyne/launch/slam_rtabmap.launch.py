@@ -59,6 +59,21 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
             remappings.append(("rgbd_image", LaunchConfiguration("rgbd_image_topic")))
         else:
             remappings.append(("rgbd_images", LaunchConfiguration("rgbd_images_topic")))
+            
+            
+            
+    cloud_output_voxelized_value = LaunchConfiguration("cloud_output_voxelized").perform(context)
+    cloud_subtract_filtering_value = LaunchConfiguration("cloud_subtract_filtering").perform(context)
+    cloud_subtract_filtering_min_neighbors_value = LaunchConfiguration("cloud_subtract_filtering_min_neighbors").perform(context)
+    scan_cloud_max_points_value = LaunchConfiguration("scan_cloud_max_points").perform(context)
+    scan_cloud_is_2d_value = LaunchConfiguration("scan_cloud_is_2d").perform(context)
+
+    map_filter_radius_value = LaunchConfiguration("map_filter_radius").perform(context)
+    map_filter_angle_value = LaunchConfiguration("map_filter_angle").perform(context)
+    map_cleanup_value = LaunchConfiguration("map_cleanup").perform(context)
+    map_always_update_value = LaunchConfiguration("map_always_update").perform(context)
+    map_empty_ray_tracing_value = LaunchConfiguration("map_empty_ray_tracing").perform(context)
+    octomap_tree_depth_value = LaunchConfiguration("octomap_tree_depth").perform(context)
 
     common_runtime = {
         "use_sim_time": use_sim_time,
@@ -80,6 +95,18 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         "map_frame_id": map_frame_id,
         "subscribe_rgbd": rgbd_image_used,
         "rgbd_cameras": rgbd_cameras,
+        "cloud_output_voxelized": cloud_output_voxelized_value in ["true", "True"],
+        "cloud_subtract_filtering": cloud_subtract_filtering_value in ["true", "True"],
+        "cloud_subtract_filtering_min_neighbors": int(cloud_subtract_filtering_min_neighbors_value),
+        "scan_cloud_max_points": int(scan_cloud_max_points_value),
+        "scan_cloud_is_2d": scan_cloud_is_2d_value in ["true", "True"],
+
+        "map_filter_radius": float(map_filter_radius_value),
+        "map_filter_angle": float(map_filter_angle_value),
+        "map_cleanup": map_cleanup_value in ["true", "True"],
+        "map_always_update": map_always_update_value in ["true", "True"],
+        "map_empty_ray_tracing": map_empty_ray_tracing_value in ["true", "True"],
+        "octomap_tree_depth": int(octomap_tree_depth_value),
     }
 
     if use_external_odom:
@@ -206,6 +233,18 @@ def generate_launch_description():
         DeclareLaunchArgument("odom_frame_id", default_value="icp_odom"),
         DeclareLaunchArgument("map_frame_id", default_value="map"),
         DeclareLaunchArgument("approx_sync", default_value="true"),
+        DeclareLaunchArgument("cloud_output_voxelized", default_value="true"),
+        DeclareLaunchArgument("cloud_subtract_filtering", default_value="false"),
+        DeclareLaunchArgument("cloud_subtract_filtering_min_neighbors", default_value="5"),
+        DeclareLaunchArgument("scan_cloud_max_points", default_value="0"),
+        DeclareLaunchArgument("scan_cloud_is_2d", default_value="false"),
+
+        DeclareLaunchArgument("map_filter_radius", default_value="0.0"),
+        DeclareLaunchArgument("map_filter_angle", default_value="30.0"),
+        DeclareLaunchArgument("map_cleanup", default_value="true"),
+        DeclareLaunchArgument("map_always_update", default_value="false"),
+        DeclareLaunchArgument("map_empty_ray_tracing", default_value="true"),
+        DeclareLaunchArgument("octomap_tree_depth", default_value="16"),
         
         OpaqueFunction(function=launch_setup),
     ])
