@@ -1,6 +1,6 @@
 from launch import LaunchDescription, LaunchContext
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.conditions import UnlessCondition
+from launch.conditions import UnlessCondition, IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -136,18 +136,19 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
     )
 
     nodes.append(
-        Node(
-            package="rtabmap_viz",
-            executable="rtabmap_viz",
-            name="rtabmap_viz",
-            output="screen",
-            parameters=[config_file, common_runtime, rtabmap_runtime],
-            remappings=remappings + [
-                ("scan_cloud", viz_scan_topic),
-                ("odom", odom_topic if use_external_odom else "odom"),
-            ],
-        )
+    Node(
+        condition=IfCondition(LaunchConfiguration("use_rtabmap_viz")),
+        package="rtabmap_viz",
+        executable="rtabmap_viz",
+        name="rtabmap_viz",
+        output="screen",
+        parameters=[config_file, common_runtime, rtabmap_runtime],
+        remappings=remappings + [
+            ("scan_cloud", viz_scan_topic),
+            ("odom", odom_topic if use_external_odom else "odom"),
+        ],
     )
+)
 
     if fixed_frame_from_imu:
         nodes.append(
@@ -189,6 +190,7 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true"),
+        DeclareLaunchArgument("use_rtabmap_viz", default_value="false"),
         DeclareLaunchArgument("deskewing", default_value="false"),
         DeclareLaunchArgument("deskewing_slerp", default_value="false"),
         DeclareLaunchArgument("frame_id", default_value="base_footprint"),
@@ -204,5 +206,6 @@ def generate_launch_description():
         DeclareLaunchArgument("odom_frame_id", default_value="icp_odom"),
         DeclareLaunchArgument("map_frame_id", default_value="map"),
         DeclareLaunchArgument("approx_sync", default_value="true"),
+        
         OpaqueFunction(function=launch_setup),
     ])
