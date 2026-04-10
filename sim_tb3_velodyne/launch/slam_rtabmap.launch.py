@@ -9,7 +9,12 @@ import os
 
 def launch_setup(context: LaunchContext, *args, **kwargs):
     pkg_share = get_package_share_directory("sim_tb3_velodyne")
-    config_file = os.path.join(pkg_share, "config", "slam_rtabmap_params.yaml")
+    icp_config_file = os.path.join(pkg_share, 'config', 'slam_rtabmap_icp_params.yaml')
+
+    shared_params_file = os.path.join(pkg_share, 'config', 'slam_rtabmap_params.yaml')
+    with open(shared_params_file, 'r') as f:
+        import yaml
+        shared_params = yaml.safe_load(f)
 
     frame_id = LaunchConfiguration("frame_id")
     use_sim_time = LaunchConfiguration("use_sim_time")
@@ -132,7 +137,7 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
             executable="icp_odometry",
             name="icp_odometry",
             output="screen",
-            parameters=[config_file, common_runtime, icp_runtime],
+            parameters=[icp_config_file, common_runtime, icp_runtime],
             remappings=remappings + [("scan_cloud", lidar_topic_deskewed)],
         )
     )
@@ -156,7 +161,7 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
             executable="rtabmap",
             name="rtabmap",
             output="screen",
-            parameters=[config_file, common_runtime, rtabmap_runtime],
+            parameters=[shared_params, common_runtime, rtabmap_runtime],
             remappings=rtabmap_remaps,
             arguments=arguments,
         )
@@ -169,7 +174,7 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         executable="rtabmap_viz",
         name="rtabmap_viz",
         output="screen",
-        parameters=[config_file, common_runtime, rtabmap_runtime],
+        parameters=[shared_params, common_runtime, rtabmap_runtime],
         remappings=remappings + [
             ("scan_cloud", viz_scan_topic),
             ("odom", odom_topic if use_external_odom else "odom"),
