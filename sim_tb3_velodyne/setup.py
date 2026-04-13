@@ -49,5 +49,12 @@ setup(
     description='Local TurtleBot3 simulation package for Velodyne modification',
     license='TODO: License declaration',
     tests_require=['pytest'],
-    entry_points={'console_scripts': []},
+    entry_points={'console_scripts': [
+        'pointcloud_passthrough = sim_tb3_velodyne.pointcloud_passthrough:main',
+        'ogm_node = sim_tb3_velodyne.ogm_node:main',
+        "ogm_from_cloud_node = sim_tb3_velodyne.ogm_from_cloud_node:main",
+        "local_ogm_node = sim_tb3_velodyne.local_ogm_node:main",
+        "global_ogm_stitcher_node = sim_tb3_velodyne.global_ogm_stitcher_node:main",
+        'occupancy_grid_inflater = sim_tb3_velodyne.occupancy_grid_inflater:main',
+        ]},
 )
