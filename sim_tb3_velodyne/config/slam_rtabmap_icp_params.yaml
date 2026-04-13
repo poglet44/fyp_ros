@@ -11,9 +11,10 @@ icp_odometry:
     Icp/PointToPlaneRadius: "0"
     Icp/MaxTranslation: "0.2"
     Icp/MaxRotation: "0.78"
+    Icp/MaxCorrespondenceDistance: "0.10"
     Icp/Strategy: "1"
     Icp/OutlierRatio: "0.85"
-    Icp/CorrespondenceRatio: "0.01"
+    Icp/CorrespondenceRatio: "0.30"
 
     Odom/ScanKeyFrameThr: "0.4"
     OdomF2M/ScanSubtractRadius: "0.05"

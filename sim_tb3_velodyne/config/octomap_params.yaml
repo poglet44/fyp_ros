@@ -2,20 +2,29 @@ octomap_server:
   ros__parameters:
     frame_id: map
     resolution: 0.05
-    sensor_model.max_range: 15.0
+    sensor_model.max_range: 5.0
     sensor_model.hit: 0.9
     sensor_model.miss: 0.3
     sensor_model.min: 0.12
     sensor_model.max: 0.97
     occupancy_min_z: 0.05
-    occupancy_max_z: 1.8
-    pointcloud_min_z: 0.0
-    pointcloud_max_z: 1.5
+    occupancy_max_z: 2.0
+    pointcloud_min_z: -100.0
+    pointcloud_max_z: 100.0
+    pointcloud_min_x: -100.0
+    pointcloud_max_x: 100.0
+    pointcloud_min_y: -100.0
+    pointcloud_max_y: 100.0
     filter_ground_plane: true
+    ground_filter/distance: 0.04
+    ground_filter/angle: 0.15
+    ground_filter/plane_distance: 0.07
     filter_speckles: true
     incremental_2D_projection: false
+    publish_free_space: false
     #min_x_size: 50.0
     #min_y_size: 50.0
-    transform_tolerance: 0.1
+    transform_tolerance: 0.005
     qos_overrides./points.subscription.reliability: reliable
     qos_overrides./points.subscription.durability: volatile
+    compress_map: true

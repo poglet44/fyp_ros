@@ -6,6 +6,14 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
 
+def as_bool(value: str) -> bool:
+    return value in ["true", "True", "1"]
+
+def as_int(value: str) -> int:
+    return int(value)
+
+def as_float(value: str) -> float:
+    return float(value)
 
 def launch_setup(context: LaunchContext, *args, **kwargs):
     pkg_share = get_package_share_directory("sim_tb3_velodyne")
@@ -14,7 +22,7 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
     shared_params_file = os.path.join(pkg_share, 'config', 'slam_rtabmap_params.yaml')
     with open(shared_params_file, 'r') as f:
         import yaml
-        shared_params = yaml.safe_load(f)
+        shared_params = yaml.safe_load(f) or {}
 
     frame_id = LaunchConfiguration("frame_id")
     use_sim_time = LaunchConfiguration("use_sim_time")
@@ -79,6 +87,20 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
     map_always_update_value = LaunchConfiguration("map_always_update").perform(context)
     map_empty_ray_tracing_value = LaunchConfiguration("map_empty_ray_tracing").perform(context)
     octomap_tree_depth_value = LaunchConfiguration("octomap_tree_depth").perform(context)
+    
+    shared_params.setdefault("cloud_output_voxelized", as_bool(cloud_output_voxelized_value))
+    shared_params.setdefault("cloud_subtract_filtering", as_bool(cloud_subtract_filtering_value))
+    shared_params.setdefault("cloud_subtract_filtering_min_neighbors", as_int(cloud_subtract_filtering_min_neighbors_value))
+    shared_params.setdefault("scan_cloud_max_points", as_int(scan_cloud_max_points_value))
+    shared_params.setdefault("scan_cloud_is_2d", as_bool(scan_cloud_is_2d_value))
+
+    shared_params.setdefault("map_filter_radius", as_float(map_filter_radius_value))
+    shared_params.setdefault("map_filter_angle", as_float(map_filter_angle_value))
+    shared_params.setdefault("map_cleanup", as_bool(map_cleanup_value))
+    shared_params.setdefault("map_always_update", as_bool(map_always_update_value))
+    shared_params.setdefault("map_empty_ray_tracing", as_bool(map_empty_ray_tracing_value))
+    shared_params.setdefault("octomap_tree_depth", as_int(octomap_tree_depth_value))
+    
 
     common_runtime = {
         "use_sim_time": use_sim_time,
@@ -100,18 +122,6 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         "map_frame_id": map_frame_id,
         "subscribe_rgbd": rgbd_image_used,
         "rgbd_cameras": rgbd_cameras,
-        "cloud_output_voxelized": cloud_output_voxelized_value in ["true", "True"],
-        "cloud_subtract_filtering": cloud_subtract_filtering_value in ["true", "True"],
-        "cloud_subtract_filtering_min_neighbors": int(cloud_subtract_filtering_min_neighbors_value),
-        "scan_cloud_max_points": int(scan_cloud_max_points_value),
-        "scan_cloud_is_2d": scan_cloud_is_2d_value in ["true", "True"],
-
-        "map_filter_radius": float(map_filter_radius_value),
-        "map_filter_angle": float(map_filter_angle_value),
-        "map_cleanup": map_cleanup_value in ["true", "True"],
-        "map_always_update": map_always_update_value in ["true", "True"],
-        "map_empty_ray_tracing": map_empty_ray_tracing_value in ["true", "True"],
-        "octomap_tree_depth": int(octomap_tree_depth_value),
     }
 
     if use_external_odom:
@@ -129,6 +139,7 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         arguments.append("-d")
 
     nodes = []
+    
 
     nodes.append(
         Node(
@@ -250,6 +261,7 @@ def generate_launch_description():
         DeclareLaunchArgument("map_always_update", default_value="false"),
         DeclareLaunchArgument("map_empty_ray_tracing", default_value="true"),
         DeclareLaunchArgument("octomap_tree_depth", default_value="16"),
+        
         
         OpaqueFunction(function=launch_setup),
     ])

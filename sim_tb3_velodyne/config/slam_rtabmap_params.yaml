@@ -1,5 +1,5 @@
 qos: 2
-wait_for_transform: 0.2
+wait_for_transform: 0.01
 
 subscribe_depth: false
 subscribe_rgb: false
@@ -8,11 +8,13 @@ subscribe_scan_cloud: true
 RGBD/ProximityMaxGraphDepth: "0"
 RGBD/ProximityPathMaxNeighbors: "0"
 RGBD/ProximityBySpace: "false"
-RGBD/NeighborLinkRefining: "true"
+RGBD/NeighborLinkRefining: "false"
 RGBD/OptimizeFromGraphEnd: "false"
-RGBD/AngularUpdate: "0.0"
-RGBD/LinearUpdate: "0.0"
-RGBD/CreateOccupancyGrid: "true"
+RGBD/AngularUpdate: "0.1"
+RGBD/LinearUpdate: "0.1"
+RGBD/CreateOccupancyGrid: "false"
+RGBD/ForceOdom3DoF: "false"
+RGBD/OptimizeMaxError: "0.5"
 
 Mem/NotLinkedNodesKept: "false"
 Mem/STMSize: "30"
@@ -28,25 +30,26 @@ Icp/PointToPlaneK: "20"
 Icp/PointToPlaneRadius: "0"
 Icp/MaxTranslation: "0.2"
 Icp/MaxRotation: "0.78"
-Icp/MaxCorrespondenceDistance: "0.5"
+Icp/MaxCorrespondenceDistance: "0.10"
 Icp/Strategy: "1"
 Icp/OutlierRatio: "0.85"
-Icp/CorrespondenceRatio: "0.15"
+Icp/CorrespondenceRatio: "0.3"
+Icp/Force4DoF: "true"
 
 Rtabmap/DetectionRate: "15.0"
 
 Grid/Sensor: "0"
 Grid/RangeMin: "0.3"
-Grid/RangeMax: "5"
+Grid/RangeMax: "10"
 Grid/RayTracing: "true"
-Grid/CellSize: "0.05"
+Grid/CellSize: "0.1"
 Grid/FootprintLength: "1.25"
 Grid/FootprintWidth: "0.45"
-Grid/FootprintHeight: "0.8"
+Grid/FootprintHeight: "1.25"
 Grid/NormalsSegmentation: "true"
-Grid/MaxObstacleHeight: "1.0"
-Grid/MinGroundHeight: "-0.03"
-Grid/MaxGroundHeight: "0.03"
+Grid/MaxObstacleHeight: "2.0"
+Grid/MinGroundHeight: "-0.08"
+Grid/MaxGroundHeight: "0.1"
 Grid/MaxGroundAngle: "45"
 Grid/NormalK: "20"
 Grid/ScanDecimation: "1"
@@ -59,7 +62,7 @@ Grid/GroundIsObstacle: "false"
 Grid/NoiseFilteringRadius: "0.0"
 Grid/NoiseFilteringMinNeighbors: "5"
 Grid/Scan2dUnknownSpaceFilled: "false"
-Grid/3D: "true"
+Grid/3D: "false"
 
 GridGlobal/UpdateError: "0.01"
 GridGlobal/FootprintRadius: "0.0"
@@ -68,11 +71,13 @@ GridGlobal/Eroded: "false"
 GridGlobal/MaxNodes: "0"
 GridGlobal/AltitudeDelta: "0"
 GridGlobal/OccupancyThr: "0.15"
-GridGlobal/ProbHit: "0.97"
-GridGlobal/ProbMiss: "0.1"
+GridGlobal/ProbHit: "0.85"
+GridGlobal/ProbMiss: "0.2"
 GridGlobal/ProbClampingMin: "0.05"
 GridGlobal/ProbClampingMax: "0.99"
 GridGlobal/FloodFillDepth: "0"
+
+Optimizer/Robust: "false"
 
 cloud_output_voxelized: true
 cloud_subtract_filtering: false
@@ -80,7 +85,7 @@ cloud_subtract_filtering_min_neighbors: 5
 scan_cloud_max_points: 0
 scan_cloud_is_2d: false
 
-map_filter_radius: 0.0
+map_filter_radius: 10.0
 map_filter_angle: 45.0
 map_cleanup: true
 map_always_update: false
