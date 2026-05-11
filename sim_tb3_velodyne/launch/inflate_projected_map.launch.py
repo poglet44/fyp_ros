@@ -13,7 +13,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("input_topic", default_value="/projected_map"),
-        DeclareLaunchArgument("output_topic", default_value="/projected_map_inflated"),
+        DeclareLaunchArgument("output_topic", default_value="/exploration_grid"),
         DeclareLaunchArgument("inflation_radius_m", default_value="0.1"),
         DeclareLaunchArgument("occupied_threshold", default_value="50"),
         DeclareLaunchArgument("use_sim_time", default_value="true"),
