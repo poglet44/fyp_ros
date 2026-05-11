@@ -1,0 +1,67 @@
+frontier_detector:
+  ros__parameters:
+    # Input map
+    map_topic: /exploration_grid
+
+    # Output topics
+    frontier_cells_topic: /frontier_cells
+    frontier_markers_topic: /frontier_markers
+    frontier_goals_topic: /frontier_goals
+    selected_goal_topic: /selected_frontier_goal
+    frontier_path_topic: /frontier_path
+
+    # Robot frame
+    #
+    # Gazebo TurtleBot may need:
+    #   base_footprint
+    #
+    # Spot real setup should usually use:
+    #   body
+    robot_frame: base_footprint
+    tf_lookup_timeout_s: 0.20
+    robot_pose_warn_period_s: 5.0
+
+    # OccupancyGrid convention
+    unknown_value: -1
+    free_max_value: 0
+    occupied_min_value: 50
+
+    # Frontier extraction
+    use_8_connected_frontiers: true
+    min_cluster_size_cells: 5
+
+    # Filtering
+    min_obstacle_clearance_m: 0.15
+    min_robot_distance_m: 0.75
+
+    # Candidate goal generation
+    goal_search_radius_m: 1.00
+    max_goals_to_publish: 50
+
+    # A* path planning
+    enable_path_planning: true
+    allow_diagonal_motion: true
+    prevent_diagonal_corner_cutting: true
+    path_obstacle_clearance_m: 0.20
+
+    # Reachability filtering
+    require_reachable: true
+
+    # Selection policy
+    #
+    # nearest:
+    #   Baseline. Select shortest A* path length.
+    #
+    # utility:
+    #   Select using:
+    #     score = utility_distance_weight * path_length_m
+    #             - utility_gain_weight * unknown_gain_cells
+    #
+    #   Lower score is better.
+    selection_policy: nearest
+    utility_distance_weight: 1.0
+    utility_gain_weight: 0.02
+
+    # RViz marker settings
+    marker_scale_m: 0.08
+    publish_debug_every_n_maps: 10

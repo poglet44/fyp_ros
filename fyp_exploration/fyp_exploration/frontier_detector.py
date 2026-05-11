@@ -1,0 +1,1165 @@
+#!/usr/bin/env python3
+
+import heapq
+import math
+from collections import deque
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Set, Tuple
+
+import rclpy
+from rclpy.duration import Duration
+from rclpy.node import Node
+
+from geometry_msgs.msg import Point, Pose, PoseArray, PoseStamped, Quaternion
+from nav_msgs.msg import OccupancyGrid, Path
+from visualization_msgs.msg import Marker, MarkerArray
+
+import tf2_ros
+
+
+Cell = Tuple[int, int]
+
+
+@dataclass
+class FrontierCandidate:
+    cluster_id: int
+    goal_cell: Cell
+    goal_pose: Pose
+    path_cells: List[Cell]
+    path_length_m: float
+    cluster_size_cells: int
+    unknown_gain_cells: int
+    score: float = float('inf')
+
+
+class FrontierDetector(Node):
+    """
+    Frontier detector + simple A* frontier path planner.
+
+    Input:
+        /exploration_grid
+
+    Outputs:
+        /frontier_cells
+        /frontier_markers
+        /frontier_goals
+        /selected_frontier_goal
+        /frontier_path
+
+    This node does NOT command the robot.
+
+    Selection policies:
+        nearest:
+            Baseline. Selects shortest valid A* path distance.
+
+        utility:
+            Selects using:
+                score = distance_weight * path_length_m
+                        - gain_weight * unknown_gain_cells
+
+            Lower score is better.
+    """
+
+    def __init__(self):
+        super().__init__('frontier_detector')
+
+        # Topics
+        self.declare_parameter('map_topic', '/exploration_grid')
+        self.declare_parameter('frontier_cells_topic', '/frontier_cells')
+        self.declare_parameter('frontier_markers_topic', '/frontier_markers')
+        self.declare_parameter('frontier_goals_topic', '/frontier_goals')
+        self.declare_parameter('selected_goal_topic', '/selected_frontier_goal')
+        self.declare_parameter('frontier_path_topic', '/frontier_path')
+
+        # Frames
+        self.declare_parameter('robot_frame', 'body')
+        self.declare_parameter('tf_lookup_timeout_s', 0.20)
+        self.declare_parameter('robot_pose_warn_period_s', 5.0)
+
+        # Occupancy classification
+        self.declare_parameter('unknown_value', -1)
+        self.declare_parameter('free_max_value', 0)
+        self.declare_parameter('occupied_min_value', 50)
+
+        # Frontier filtering
+        self.declare_parameter('use_8_connected_frontiers', True)
+        self.declare_parameter('min_cluster_size_cells', 8)
+        self.declare_parameter('min_obstacle_clearance_m', 0.35)
+        self.declare_parameter('min_robot_distance_m', 0.75)
+
+        # Goal generation
+        self.declare_parameter('goal_search_radius_m', 0.75)
+        self.declare_parameter('max_goals_to_publish', 50)
+
+        # Path planning
+        self.declare_parameter('enable_path_planning', True)
+        self.declare_parameter('allow_diagonal_motion', True)
+        self.declare_parameter('prevent_diagonal_corner_cutting', True)
+        self.declare_parameter('path_obstacle_clearance_m', 0.20)
+
+        # Reachability
+        self.declare_parameter('require_reachable', True)
+
+        # Selection policy
+        self.declare_parameter('selection_policy', 'nearest')
+        self.declare_parameter('utility_distance_weight', 1.0)
+        self.declare_parameter('utility_gain_weight', 0.02)
+
+        # Visualisation / logging
+        self.declare_parameter('marker_scale_m', 0.08)
+        self.declare_parameter('publish_debug_every_n_maps', 10)
+
+        self.map_topic = self.get_parameter('map_topic').value
+        self.frontier_cells_topic = self.get_parameter('frontier_cells_topic').value
+        self.frontier_markers_topic = self.get_parameter('frontier_markers_topic').value
+        self.frontier_goals_topic = self.get_parameter('frontier_goals_topic').value
+        self.selected_goal_topic = self.get_parameter('selected_goal_topic').value
+        self.frontier_path_topic = self.get_parameter('frontier_path_topic').value
+
+        self.robot_frame = self.get_parameter('robot_frame').value
+        self.tf_lookup_timeout_s = float(self.get_parameter('tf_lookup_timeout_s').value)
+        self.robot_pose_warn_period_s = float(self.get_parameter('robot_pose_warn_period_s').value)
+
+        self.unknown_value = int(self.get_parameter('unknown_value').value)
+        self.free_max_value = int(self.get_parameter('free_max_value').value)
+        self.occupied_min_value = int(self.get_parameter('occupied_min_value').value)
+
+        self.use_8_connected_frontiers = bool(self.get_parameter('use_8_connected_frontiers').value)
+        self.min_cluster_size_cells = int(self.get_parameter('min_cluster_size_cells').value)
+        self.min_obstacle_clearance_m = float(self.get_parameter('min_obstacle_clearance_m').value)
+        self.min_robot_distance_m = float(self.get_parameter('min_robot_distance_m').value)
+
+        self.goal_search_radius_m = float(self.get_parameter('goal_search_radius_m').value)
+        self.max_goals_to_publish = int(self.get_parameter('max_goals_to_publish').value)
+
+        self.enable_path_planning = bool(self.get_parameter('enable_path_planning').value)
+        self.allow_diagonal_motion = bool(self.get_parameter('allow_diagonal_motion').value)
+        self.prevent_diagonal_corner_cutting = bool(
+            self.get_parameter('prevent_diagonal_corner_cutting').value
+        )
+        self.path_obstacle_clearance_m = float(
+            self.get_parameter('path_obstacle_clearance_m').value
+        )
+
+        self.require_reachable = bool(self.get_parameter('require_reachable').value)
+
+        self.selection_policy = str(self.get_parameter('selection_policy').value)
+        self.utility_distance_weight = float(self.get_parameter('utility_distance_weight').value)
+        self.utility_gain_weight = float(self.get_parameter('utility_gain_weight').value)
+
+        self.marker_scale_m = float(self.get_parameter('marker_scale_m').value)
+        self.publish_debug_every_n_maps = int(self.get_parameter('publish_debug_every_n_maps').value)
+
+        self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=10.0))
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        self.frontier_grid_pub = self.create_publisher(
+            OccupancyGrid,
+            self.frontier_cells_topic,
+            10,
+        )
+
+        self.marker_pub = self.create_publisher(
+            MarkerArray,
+            self.frontier_markers_topic,
+            10,
+        )
+
+        self.goal_pub = self.create_publisher(
+            PoseArray,
+            self.frontier_goals_topic,
+            10,
+        )
+
+        self.selected_goal_pub = self.create_publisher(
+            PoseStamped,
+            self.selected_goal_topic,
+            10,
+        )
+
+        self.path_pub = self.create_publisher(
+            Path,
+            self.frontier_path_topic,
+            10,
+        )
+
+        self.map_sub = self.create_subscription(
+            OccupancyGrid,
+            self.map_topic,
+            self.map_callback,
+            10,
+        )
+
+        self.map_count = 0
+
+        self.get_logger().info('Frontier detector + A* path planner started.')
+        self.get_logger().info(f'Subscribing to: {self.map_topic}')
+        self.get_logger().info(f'Robot frame: {self.robot_frame}')
+        self.get_logger().info(f'Require reachable: {self.require_reachable}')
+        self.get_logger().info(f'Path planning enabled: {self.enable_path_planning}')
+        self.get_logger().info(f'Selection policy: {self.selection_policy}')
+
+    def map_callback(self, msg: OccupancyGrid) -> None:
+        self.map_count += 1
+
+        width = msg.info.width
+        height = msg.info.height
+
+        if width == 0 or height == 0:
+            self.get_logger().warn('Received empty occupancy grid.')
+            return
+
+        robot_cell = self.lookup_robot_cell(msg)
+
+        occupied_cells = self.find_occupied_cells(msg)
+
+        reachable_cells = None
+        if self.require_reachable:
+            if robot_cell is None:
+                self.get_logger().warn(
+            'require_reachable=True, but robot pose is unavailable. '
+            'No selected goal/path will be generated for this map.',
+            throttle_duration_sec=self.robot_pose_warn_period_s,
+        )
+            else:
+                reachable_cells = self.compute_reachable_free_cells(msg, robot_cell)
+
+        raw_frontiers = self.detect_raw_frontiers(msg)
+        filtered_frontiers = self.filter_frontiers(
+            msg=msg,
+            frontier_cells=raw_frontiers,
+            occupied_cells=occupied_cells,
+            robot_cell=robot_cell,
+            reachable_cells=reachable_cells,
+        )
+
+        clusters = self.cluster_frontiers(filtered_frontiers)
+        clusters = [
+            cluster for cluster in clusters
+            if len(cluster) >= self.min_cluster_size_cells
+        ]
+
+        candidates = self.build_candidates(
+            msg=msg,
+            clusters=clusters,
+            occupied_cells=occupied_cells,
+            robot_cell=robot_cell,
+            reachable_cells=reachable_cells,
+        )
+
+        candidate_goals = [candidate.goal_pose for candidate in candidates]
+
+        selected_candidate = self.select_candidate(candidates)
+
+        selected_goal_pose = None
+        selected_path_cells: List[Cell] = []
+
+        if selected_candidate is not None:
+            selected_goal_pose = selected_candidate.goal_pose
+            selected_path_cells = selected_candidate.path_cells
+
+        self.publish_frontier_grid(msg, filtered_frontiers)
+        self.publish_goals(msg, candidate_goals)
+        self.publish_selected_goal(msg, selected_goal_pose)
+        self.publish_path(msg, selected_path_cells)
+        self.publish_markers(
+            msg=msg,
+            frontier_cells=filtered_frontiers,
+            candidates=candidates,
+            selected_candidate=selected_candidate,
+            selected_path_cells=selected_path_cells,
+        )
+
+        if self.map_count % self.publish_debug_every_n_maps == 0:
+            selected_text = 'none'
+            if selected_candidate is not None:
+                selected_text = (
+                    f'id={selected_candidate.cluster_id}, '
+                    f'path={selected_candidate.path_length_m:.2f}m, '
+                    f'cluster={selected_candidate.cluster_size_cells}, '
+                    f'gain={selected_candidate.unknown_gain_cells}, '
+                    f'score={selected_candidate.score:.3f}'
+                )
+
+            self.get_logger().info(
+                f'policy={self.selection_policy}, '
+                f'raw_frontiers={len(raw_frontiers)}, '
+                f'filtered_frontiers={len(filtered_frontiers)}, '
+                f'clusters={len(clusters)}, '
+                f'candidate_goals={len(candidates)}, '
+                f'selected={selected_text}'
+            )
+
+    # -------------------------------------------------------------------------
+    # Occupancy helpers
+    # -------------------------------------------------------------------------
+
+    def index(self, x: int, y: int, width: int) -> int:
+        return y * width + x
+
+    def in_bounds(self, x: int, y: int, width: int, height: int) -> bool:
+        return 0 <= x < width and 0 <= y < height
+
+    def cell_value(self, msg: OccupancyGrid, x: int, y: int) -> int:
+        return msg.data[self.index(x, y, msg.info.width)]
+
+    def is_unknown(self, msg: OccupancyGrid, x: int, y: int) -> bool:
+        return self.cell_value(msg, x, y) == self.unknown_value
+
+    def is_free(self, msg: OccupancyGrid, x: int, y: int) -> bool:
+        value = self.cell_value(msg, x, y)
+        return value >= 0 and value <= self.free_max_value
+
+    def is_occupied(self, msg: OccupancyGrid, x: int, y: int) -> bool:
+        return self.cell_value(msg, x, y) >= self.occupied_min_value
+
+    def neighbours4(self, x: int, y: int) -> List[Cell]:
+        return [
+            (x + 1, y),
+            (x - 1, y),
+            (x, y + 1),
+            (x, y - 1),
+        ]
+
+    def neighbours8(self, x: int, y: int) -> List[Cell]:
+        return [
+            (x + 1, y),
+            (x - 1, y),
+            (x, y + 1),
+            (x, y - 1),
+            (x + 1, y + 1),
+            (x + 1, y - 1),
+            (x - 1, y + 1),
+            (x - 1, y - 1),
+        ]
+
+    def frontier_neighbours(self, x: int, y: int) -> List[Cell]:
+        if self.use_8_connected_frontiers:
+            return self.neighbours8(x, y)
+        return self.neighbours4(x, y)
+
+    # -------------------------------------------------------------------------
+    # Coordinate transforms
+    # -------------------------------------------------------------------------
+
+    def world_to_cell(self, msg: OccupancyGrid, wx: float, wy: float) -> Optional[Cell]:
+        origin_x = msg.info.origin.position.x
+        origin_y = msg.info.origin.position.y
+        resolution = msg.info.resolution
+
+        cx = int(math.floor((wx - origin_x) / resolution))
+        cy = int(math.floor((wy - origin_y) / resolution))
+
+        if not self.in_bounds(cx, cy, msg.info.width, msg.info.height):
+            return None
+
+        return (cx, cy)
+
+    def cell_to_world(self, msg: OccupancyGrid, x: int, y: int) -> Tuple[float, float]:
+        origin_x = msg.info.origin.position.x
+        origin_y = msg.info.origin.position.y
+        resolution = msg.info.resolution
+
+        wx = origin_x + (x + 0.5) * resolution
+        wy = origin_y + (y + 0.5) * resolution
+
+        return wx, wy
+
+    def lookup_robot_cell(self, msg: OccupancyGrid) -> Optional[Cell]:
+        map_frame = msg.header.frame_id
+
+        if map_frame == '':
+            return None
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                map_frame,
+                self.robot_frame,
+                rclpy.time.Time(),
+                timeout=Duration(seconds=self.tf_lookup_timeout_s),
+            )
+
+            robot_x = transform.transform.translation.x
+            robot_y = transform.transform.translation.y
+
+            return self.world_to_cell(msg, robot_x, robot_y)
+
+        except Exception:
+            return None
+
+    # -------------------------------------------------------------------------
+    # Frontier detection
+    # -------------------------------------------------------------------------
+
+    def detect_raw_frontiers(self, msg: OccupancyGrid) -> Set[Cell]:
+        width = msg.info.width
+        height = msg.info.height
+
+        frontiers: Set[Cell] = set()
+
+        for y in range(height):
+            for x in range(width):
+                if not self.is_free(msg, x, y):
+                    continue
+
+                for nx, ny in self.frontier_neighbours(x, y):
+                    if not self.in_bounds(nx, ny, width, height):
+                        continue
+
+                    if self.is_unknown(msg, nx, ny):
+                        frontiers.add((x, y))
+                        break
+
+        return frontiers
+
+    def find_occupied_cells(self, msg: OccupancyGrid) -> Set[Cell]:
+        width = msg.info.width
+        height = msg.info.height
+
+        occupied: Set[Cell] = set()
+
+        for y in range(height):
+            for x in range(width):
+                if self.is_occupied(msg, x, y):
+                    occupied.add((x, y))
+
+        return occupied
+
+    def filter_frontiers(
+        self,
+        msg: OccupancyGrid,
+        frontier_cells: Set[Cell],
+        occupied_cells: Set[Cell],
+        robot_cell: Optional[Cell],
+        reachable_cells: Optional[Set[Cell]],
+    ) -> Set[Cell]:
+        filtered: Set[Cell] = set()
+
+        for cell in frontier_cells:
+            if reachable_cells is not None and cell not in reachable_cells:
+                continue
+
+            if robot_cell is not None:
+                if self.cell_distance_m(msg, cell, robot_cell) < self.min_robot_distance_m:
+                    continue
+
+            if not self.has_obstacle_clearance(
+                msg,
+                cell,
+                occupied_cells,
+                self.min_obstacle_clearance_m,
+            ):
+                continue
+
+            filtered.add(cell)
+
+        return filtered
+
+    def has_obstacle_clearance(
+        self,
+        msg: OccupancyGrid,
+        cell: Cell,
+        occupied_cells: Set[Cell],
+        clearance_m: float,
+    ) -> bool:
+        if clearance_m <= 0.0:
+            return True
+
+        x, y = cell
+        resolution = msg.info.resolution
+        radius_cells = int(math.ceil(clearance_m / resolution))
+        radius_sq = radius_cells * radius_cells
+
+        for oy in range(y - radius_cells, y + radius_cells + 1):
+            for ox in range(x - radius_cells, x + radius_cells + 1):
+                if not self.in_bounds(ox, oy, msg.info.width, msg.info.height):
+                    continue
+
+                dx = ox - x
+                dy = oy - y
+
+                if dx * dx + dy * dy > radius_sq:
+                    continue
+
+                if (ox, oy) in occupied_cells:
+                    return False
+
+        return True
+
+    def cell_distance_m(self, msg: OccupancyGrid, a: Cell, b: Cell) -> float:
+        ax, ay = a
+        bx, by = b
+
+        dx = (ax - bx) * msg.info.resolution
+        dy = (ay - by) * msg.info.resolution
+
+        return math.sqrt(dx * dx + dy * dy)
+
+    # -------------------------------------------------------------------------
+    # Reachability
+    # -------------------------------------------------------------------------
+
+    def compute_reachable_free_cells(self, msg: OccupancyGrid, robot_cell: Cell) -> Set[Cell]:
+        width = msg.info.width
+        height = msg.info.height
+
+        if not self.in_bounds(robot_cell[0], robot_cell[1], width, height):
+            return set()
+
+        if not self.is_free(msg, robot_cell[0], robot_cell[1]):
+            return set()
+
+        reachable: Set[Cell] = set()
+        queue = deque([robot_cell])
+        reachable.add(robot_cell)
+
+        while queue:
+            x, y = queue.popleft()
+
+            for nx, ny in self.neighbours4(x, y):
+                if not self.in_bounds(nx, ny, width, height):
+                    continue
+
+                neighbour = (nx, ny)
+
+                if neighbour in reachable:
+                    continue
+
+                if not self.is_free(msg, nx, ny):
+                    continue
+
+                reachable.add(neighbour)
+                queue.append(neighbour)
+
+        return reachable
+
+    # -------------------------------------------------------------------------
+    # Clustering
+    # -------------------------------------------------------------------------
+
+    def cluster_frontiers(self, frontier_cells: Set[Cell]) -> List[List[Cell]]:
+        unvisited = set(frontier_cells)
+        clusters: List[List[Cell]] = []
+
+        while unvisited:
+            start = unvisited.pop()
+            cluster = [start]
+            queue = deque([start])
+
+            while queue:
+                x, y = queue.popleft()
+
+                for nx, ny in self.neighbours8(x, y):
+                    neighbour = (nx, ny)
+
+                    if neighbour not in unvisited:
+                        continue
+
+                    unvisited.remove(neighbour)
+                    queue.append(neighbour)
+                    cluster.append(neighbour)
+
+            clusters.append(cluster)
+
+        clusters.sort(key=len, reverse=True)
+        return clusters
+
+    # -------------------------------------------------------------------------
+    # Candidate generation + metrics
+    # -------------------------------------------------------------------------
+
+    def build_candidates(
+        self,
+        msg: OccupancyGrid,
+        clusters: List[List[Cell]],
+        occupied_cells: Set[Cell],
+        robot_cell: Optional[Cell],
+        reachable_cells: Optional[Set[Cell]],
+    ) -> List[FrontierCandidate]:
+        candidates: List[FrontierCandidate] = []
+
+        for cluster_id, cluster in enumerate(clusters):
+            if len(candidates) >= self.max_goals_to_publish:
+                break
+
+            goal_cell = self.find_goal_cell_for_cluster(
+                msg=msg,
+                cluster=cluster,
+                occupied_cells=occupied_cells,
+                reachable_cells=reachable_cells,
+            )
+
+            if goal_cell is None:
+                continue
+
+            goal_pose = self.cell_to_pose_facing_unknown(msg, goal_cell, cluster)
+            unknown_gain_cells = self.estimate_unknown_gain_cells(msg, cluster)
+
+            path_cells: List[Cell] = []
+            path_length_m = float('inf')
+
+            if self.enable_path_planning and robot_cell is not None:
+                path_cells, path_length_m = self.astar(
+                msg=msg,
+                start=robot_cell,
+                goal=goal_cell,
+                occupied_cells=occupied_cells,
+            )
+
+                if not path_cells:
+                    continue
+
+            candidate = FrontierCandidate(
+                cluster_id=cluster_id,
+                goal_cell=goal_cell,
+                goal_pose=goal_pose,
+                path_cells=path_cells,
+                path_length_m=path_length_m,
+                cluster_size_cells=len(cluster),
+                unknown_gain_cells=unknown_gain_cells,
+            )
+
+            candidates.append(candidate)
+
+        return candidates
+
+    def estimate_unknown_gain_cells(self, msg: OccupancyGrid, cluster: List[Cell]) -> int:
+        """
+        Simple information-gain proxy.
+
+        Counts unique unknown cells adjacent to the frontier cluster.
+
+        This is not full ray-cast sensor gain yet. It is intentionally simple
+        and stable for the first utility baseline.
+        """
+        unknown_cells: Set[Cell] = set()
+
+        for fx, fy in cluster:
+            for nx, ny in self.frontier_neighbours(fx, fy):
+                if not self.in_bounds(nx, ny, msg.info.width, msg.info.height):
+                    continue
+
+                if self.is_unknown(msg, nx, ny):
+                    unknown_cells.add((nx, ny))
+
+        return len(unknown_cells)
+
+    def find_goal_cell_for_cluster(
+        self,
+        msg: OccupancyGrid,
+        cluster: List[Cell],
+        occupied_cells: Set[Cell],
+        reachable_cells: Optional[Set[Cell]],
+    ) -> Optional[Cell]:
+        width = msg.info.width
+        height = msg.info.height
+        resolution = msg.info.resolution
+
+        cx = sum(cell[0] for cell in cluster) / float(len(cluster))
+        cy = sum(cell[1] for cell in cluster) / float(len(cluster))
+
+        centre_cell = (int(round(cx)), int(round(cy)))
+
+        search_radius_cells = int(math.ceil(self.goal_search_radius_m / resolution))
+
+        candidates: List[Tuple[float, Cell]] = []
+
+        for y in range(centre_cell[1] - search_radius_cells, centre_cell[1] + search_radius_cells + 1):
+            for x in range(centre_cell[0] - search_radius_cells, centre_cell[0] + search_radius_cells + 1):
+                if not self.in_bounds(x, y, width, height):
+                    continue
+
+                if not self.is_free(msg, x, y):
+                    continue
+
+                cell = (x, y)
+
+                if reachable_cells is not None and cell not in reachable_cells:
+                    continue
+
+                if not self.has_obstacle_clearance(
+                    msg,
+                    cell,
+                    occupied_cells,
+                    self.min_obstacle_clearance_m,
+                ):
+                    continue
+
+                dx = x - cx
+                dy = y - cy
+                dist_sq = dx * dx + dy * dy
+
+                candidates.append((dist_sq, cell))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
+
+    def cell_to_pose_facing_unknown(
+        self,
+        msg: OccupancyGrid,
+        goal_cell: Cell,
+        cluster: List[Cell],
+    ) -> Pose:
+        gx, gy = goal_cell
+        wx, wy = self.cell_to_world(msg, gx, gy)
+
+        unknown_vectors: List[Tuple[float, float]] = []
+
+        for fx, fy in cluster:
+            for nx, ny in self.frontier_neighbours(fx, fy):
+                if not self.in_bounds(nx, ny, msg.info.width, msg.info.height):
+                    continue
+
+                if self.is_unknown(msg, nx, ny):
+                    unknown_vectors.append((float(nx - gx), float(ny - gy)))
+
+        if unknown_vectors:
+            vx = sum(v[0] for v in unknown_vectors) / float(len(unknown_vectors))
+            vy = sum(v[1] for v in unknown_vectors) / float(len(unknown_vectors))
+            yaw = math.atan2(vy, vx)
+        else:
+            yaw = 0.0
+
+        pose = Pose()
+        pose.position.x = wx
+        pose.position.y = wy
+        pose.position.z = 0.0
+        pose.orientation = self.yaw_to_quaternion(yaw)
+
+        return pose
+
+    def yaw_to_quaternion(self, yaw: float) -> Quaternion:
+        q = Quaternion()
+        q.x = 0.0
+        q.y = 0.0
+        q.z = math.sin(yaw / 2.0)
+        q.w = math.cos(yaw / 2.0)
+        return q
+
+    # -------------------------------------------------------------------------
+    # Selection policies
+    # -------------------------------------------------------------------------
+
+    def select_candidate(self, candidates: List[FrontierCandidate]) -> Optional[FrontierCandidate]:
+        if not candidates:
+            return None
+
+        if self.selection_policy == 'nearest':
+            return self.select_nearest_candidate(candidates)
+
+        if self.selection_policy == 'utility':
+            return self.select_utility_candidate(candidates)
+
+        self.get_logger().warn(
+            f'Unknown selection_policy="{self.selection_policy}". Falling back to "nearest".'
+        )
+        return self.select_nearest_candidate(candidates)
+
+    def select_nearest_candidate(
+        self,
+        candidates: List[FrontierCandidate],
+    ) -> Optional[FrontierCandidate]:
+        best_candidate = None
+        best_score = float('inf')
+
+        for candidate in candidates:
+            candidate.score = candidate.path_length_m
+
+            if candidate.score < best_score:
+                best_score = candidate.score
+                best_candidate = candidate
+
+        return best_candidate
+
+    def select_utility_candidate(
+        self,
+        candidates: List[FrontierCandidate],
+    ) -> Optional[FrontierCandidate]:
+        best_candidate = None
+        best_score = float('inf')
+
+        for candidate in candidates:
+            candidate.score = (
+                self.utility_distance_weight * candidate.path_length_m
+                - self.utility_gain_weight * float(candidate.unknown_gain_cells)
+            )
+
+            if candidate.score < best_score:
+                best_score = candidate.score
+                best_candidate = candidate
+
+        return best_candidate
+
+    # -------------------------------------------------------------------------
+    # A* path planning
+    # -------------------------------------------------------------------------
+
+    def astar(
+        self,
+        msg: OccupancyGrid,
+        start: Cell,
+        goal: Cell,
+        occupied_cells: Set[Cell],
+    ) -> Tuple[List[Cell], float]:
+        width = msg.info.width
+        height = msg.info.height
+
+        if not self.in_bounds(start[0], start[1], width, height):
+            return [], float('inf')
+
+        if not self.in_bounds(goal[0], goal[1], width, height):
+            return [], float('inf')
+
+        if not self.is_free(msg, start[0], start[1]):
+            return [], float('inf')
+
+        if not self.is_free(msg, goal[0], goal[1]):
+            return [], float('inf')
+
+        if not self.has_obstacle_clearance(
+            msg,
+            start,
+            occupied_cells,
+            self.path_obstacle_clearance_m,
+        ):
+            return [], float('inf')
+
+        if not self.has_obstacle_clearance(
+            msg,
+            goal,
+            occupied_cells,
+            self.path_obstacle_clearance_m,
+        ):
+            return [], float('inf')
+
+        open_heap: List[Tuple[float, float, Cell]] = []
+        heapq.heappush(open_heap, (0.0, 0.0, start))
+
+        came_from: Dict[Cell, Cell] = {}
+        g_score: Dict[Cell, float] = {start: 0.0}
+
+        closed: Set[Cell] = set()
+
+        while open_heap:
+            _, current_g, current = heapq.heappop(open_heap)
+
+            if current in closed:
+                continue
+
+            if current == goal:
+                path = self.reconstruct_path(came_from, current)
+                return path, g_score[current] * msg.info.resolution
+
+            closed.add(current)
+
+            for neighbour, step_cost in self.astar_neighbours(
+                msg=msg,
+                cell=current,
+                occupied_cells=occupied_cells,
+            ):
+                if neighbour in closed:
+                    continue
+
+                tentative_g = current_g + step_cost
+
+                if tentative_g < g_score.get(neighbour, float('inf')):
+                    came_from[neighbour] = current
+                    g_score[neighbour] = tentative_g
+
+                    priority = tentative_g + self.heuristic_cells(neighbour, goal)
+                    heapq.heappush(open_heap, (priority, tentative_g, neighbour))
+
+        return [], float('inf')
+
+    def astar_neighbours(
+        self,
+        msg: OccupancyGrid,
+        cell: Cell,
+        occupied_cells: Set[Cell],
+    ) -> List[Tuple[Cell, float]]:
+        x, y = cell
+
+        if self.allow_diagonal_motion:
+            candidate_moves = [
+                (1, 0, 1.0),
+                (-1, 0, 1.0),
+                (0, 1, 1.0),
+                (0, -1, 1.0),
+                (1, 1, math.sqrt(2.0)),
+                (1, -1, math.sqrt(2.0)),
+                (-1, 1, math.sqrt(2.0)),
+                (-1, -1, math.sqrt(2.0)),
+            ]
+        else:
+            candidate_moves = [
+                (1, 0, 1.0),
+                (-1, 0, 1.0),
+                (0, 1, 1.0),
+                (0, -1, 1.0),
+            ]
+
+        neighbours: List[Tuple[Cell, float]] = []
+
+        for dx, dy, cost in candidate_moves:
+            nx = x + dx
+            ny = y + dy
+            neighbour = (nx, ny)
+
+            if not self.in_bounds(nx, ny, msg.info.width, msg.info.height):
+                continue
+
+            if not self.is_free(msg, nx, ny):
+                continue
+
+            if not self.has_obstacle_clearance(
+                msg,
+                neighbour,
+                occupied_cells,
+                self.path_obstacle_clearance_m,
+            ):
+                continue
+
+            is_diagonal = dx != 0 and dy != 0
+
+            if is_diagonal and self.prevent_diagonal_corner_cutting:
+                cardinal_a = (x + dx, y)
+                cardinal_b = (x, y + dy)
+
+                if not self.is_free(msg, cardinal_a[0], cardinal_a[1]):
+                    continue
+
+                if not self.is_free(msg, cardinal_b[0], cardinal_b[1]):
+                    continue
+
+                if not self.has_obstacle_clearance(
+                    msg,
+                    cardinal_a,
+                    occupied_cells,
+                    self.path_obstacle_clearance_m,
+                ):
+                    continue
+
+                if not self.has_obstacle_clearance(
+                    msg,
+                    cardinal_b,
+                    occupied_cells,
+                    self.path_obstacle_clearance_m,
+                ):
+                    continue
+
+            neighbours.append((neighbour, cost))
+
+        return neighbours
+
+    def heuristic_cells(self, a: Cell, b: Cell) -> float:
+        ax, ay = a
+        bx, by = b
+
+        dx = ax - bx
+        dy = ay - by
+
+        return math.sqrt(dx * dx + dy * dy)
+
+    def reconstruct_path(self, came_from: Dict[Cell, Cell], current: Cell) -> List[Cell]:
+        path = [current]
+
+        while current in came_from:
+            current = came_from[current]
+            path.append(current)
+
+        path.reverse()
+        return path
+
+    # -------------------------------------------------------------------------
+    # Publishers
+    # -------------------------------------------------------------------------
+
+    def publish_frontier_grid(self, msg: OccupancyGrid, frontier_cells: Set[Cell]) -> None:
+        frontier_grid = OccupancyGrid()
+        frontier_grid.header = msg.header
+        frontier_grid.info = msg.info
+
+        data = [0] * (msg.info.width * msg.info.height)
+
+        for x, y in frontier_cells:
+            data[self.index(x, y, msg.info.width)] = 100
+
+        frontier_grid.data = data
+        self.frontier_grid_pub.publish(frontier_grid)
+
+    def publish_goals(self, msg: OccupancyGrid, goals: List[Pose]) -> None:
+        pose_array = PoseArray()
+        pose_array.header = msg.header
+        pose_array.poses = goals
+
+        self.goal_pub.publish(pose_array)
+
+    def publish_selected_goal(self, msg: OccupancyGrid, selected_goal: Optional[Pose]) -> None:
+        if selected_goal is None:
+            return
+
+        stamped = PoseStamped()
+        stamped.header = msg.header
+        stamped.pose = selected_goal
+
+        self.selected_goal_pub.publish(stamped)
+
+    def publish_path(self, msg: OccupancyGrid, path_cells: List[Cell]) -> None:
+        path = Path()
+        path.header = msg.header
+
+        for cell in path_cells:
+            x, y = cell
+            wx, wy = self.cell_to_world(msg, x, y)
+
+            pose = PoseStamped()
+            pose.header = msg.header
+            pose.pose.position.x = wx
+            pose.pose.position.y = wy
+            pose.pose.position.z = 0.05
+            pose.pose.orientation.w = 1.0
+
+            path.poses.append(pose)
+
+        self.path_pub.publish(path)
+
+    def publish_markers(
+        self,
+        msg: OccupancyGrid,
+        frontier_cells: Set[Cell],
+        candidates: List[FrontierCandidate],
+        selected_candidate: Optional[FrontierCandidate],
+        selected_path_cells: List[Cell],
+    ) -> None:
+        marker_array = MarkerArray()
+
+        delete_marker = Marker()
+        delete_marker.header = msg.header
+        delete_marker.ns = 'frontier_detector'
+        delete_marker.id = 0
+        delete_marker.action = Marker.DELETEALL
+        marker_array.markers.append(delete_marker)
+
+        frontier_points = Marker()
+        frontier_points.header = msg.header
+        frontier_points.ns = 'frontier_cells'
+        frontier_points.id = 1
+        frontier_points.type = Marker.POINTS
+        frontier_points.action = Marker.ADD
+        frontier_points.scale.x = self.marker_scale_m
+        frontier_points.scale.y = self.marker_scale_m
+        frontier_points.color.r = 1.0
+        frontier_points.color.g = 0.35
+        frontier_points.color.b = 0.0
+        frontier_points.color.a = 1.0
+
+        for x, y in frontier_cells:
+            wx, wy = self.cell_to_world(msg, x, y)
+            point = Point()
+            point.x = wx
+            point.y = wy
+            point.z = 0.05
+            frontier_points.points.append(point)
+
+        marker_array.markers.append(frontier_points)
+
+        for i, candidate in enumerate(candidates):
+            sphere = Marker()
+            sphere.header = msg.header
+            sphere.ns = 'candidate_frontier_goals'
+            sphere.id = 1000 + i
+            sphere.type = Marker.SPHERE
+            sphere.action = Marker.ADD
+            sphere.pose = candidate.goal_pose
+            sphere.pose.position.z = 0.15
+            sphere.scale.x = 0.25
+            sphere.scale.y = 0.25
+            sphere.scale.z = 0.25
+            sphere.color.r = 0.0
+            sphere.color.g = 0.8
+            sphere.color.b = 1.0
+            sphere.color.a = 0.9
+            marker_array.markers.append(sphere)
+
+            text = Marker()
+            text.header = msg.header
+            text.ns = 'frontier_goal_labels'
+            text.id = 2000 + i
+            text.type = Marker.TEXT_VIEW_FACING
+            text.action = Marker.ADD
+            text.pose = candidate.goal_pose
+            text.pose.position.z = 0.5
+            text.scale.z = 0.22
+            text.color.r = 1.0
+            text.color.g = 1.0
+            text.color.b = 1.0
+            text.color.a = 1.0
+            text.text = (
+                f'F{candidate.cluster_id}\n'
+                f'{candidate.path_length_m:.1f}m\n'
+                f'g={candidate.unknown_gain_cells}'
+            )
+            marker_array.markers.append(text)
+
+        if selected_candidate is not None:
+            selected = Marker()
+            selected.header = msg.header
+            selected.ns = 'selected_frontier_goal'
+            selected.id = 3000
+            selected.type = Marker.SPHERE
+            selected.action = Marker.ADD
+            selected.pose = selected_candidate.goal_pose
+            selected.pose.position.z = 0.25
+            selected.scale.x = 0.45
+            selected.scale.y = 0.45
+            selected.scale.z = 0.45
+            selected.color.r = 1.0
+            selected.color.g = 0.0
+            selected.color.b = 1.0
+            selected.color.a = 1.0
+            marker_array.markers.append(selected)
+
+        if selected_path_cells:
+            path_marker = Marker()
+            path_marker.header = msg.header
+            path_marker.ns = 'selected_frontier_path'
+            path_marker.id = 4000
+            path_marker.type = Marker.LINE_STRIP
+            path_marker.action = Marker.ADD
+            path_marker.scale.x = 0.06
+            path_marker.color.r = 0.0
+            path_marker.color.g = 1.0
+            path_marker.color.b = 0.0
+            path_marker.color.a = 1.0
+
+            for x, y in selected_path_cells:
+                wx, wy = self.cell_to_world(msg, x, y)
+                point = Point()
+                point.x = wx
+                point.y = wy
+                point.z = 0.12
+                path_marker.points.append(point)
+
+            marker_array.markers.append(path_marker)
+
+        self.marker_pub.publish(marker_array)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = FrontierDetector()
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
