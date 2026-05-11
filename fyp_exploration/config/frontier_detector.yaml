@@ -39,7 +39,7 @@ frontier_detector:
     max_goals_to_publish: 50
 
     # A* path planning
-    enable_path_planning: true
+    enable_path_planning: false
     allow_diagonal_motion: true
     prevent_diagonal_corner_cutting: true
     path_obstacle_clearance_m: 0.20
@@ -71,7 +71,7 @@ frontier_detector:
     #
     # For utility policy:
     #   hysteresis_switch_margin is in utility score units.
-    enable_goal_hysteresis: true
+    enable_goal_hysteresis: false
     hysteresis_goal_match_distance_m: 0.75
     hysteresis_switch_margin: 0.75
 
