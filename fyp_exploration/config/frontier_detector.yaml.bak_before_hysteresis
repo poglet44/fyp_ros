@@ -62,19 +62,6 @@ frontier_detector:
     utility_distance_weight: 1.0
     utility_gain_weight: 0.02
 
-    # Goal hysteresis
-    #
-    # Prevents the selected frontier from flickering between similar candidates.
-    #
-    # For nearest policy:
-    #   hysteresis_switch_margin is in metres of path length.
-    #
-    # For utility policy:
-    #   hysteresis_switch_margin is in utility score units.
-    enable_goal_hysteresis: true
-    hysteresis_goal_match_distance_m: 0.75
-    hysteresis_switch_margin: 0.75
-
     # RViz marker settings
     marker_scale_m: 0.08
     publish_debug_every_n_maps: 10

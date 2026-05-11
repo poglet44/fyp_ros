@@ -105,11 +105,6 @@ class FrontierDetector(Node):
         self.declare_parameter('utility_distance_weight', 1.0)
         self.declare_parameter('utility_gain_weight', 0.02)
 
-        # Goal hysteresis
-        self.declare_parameter('enable_goal_hysteresis', True)
-        self.declare_parameter('hysteresis_goal_match_distance_m', 0.75)
-        self.declare_parameter('hysteresis_switch_margin', 0.75)
-
         # Visualisation / logging
         self.declare_parameter('marker_scale_m', 0.08)
         self.declare_parameter('publish_debug_every_n_maps', 10)
@@ -151,16 +146,6 @@ class FrontierDetector(Node):
         self.selection_policy = str(self.get_parameter('selection_policy').value)
         self.utility_distance_weight = float(self.get_parameter('utility_distance_weight').value)
         self.utility_gain_weight = float(self.get_parameter('utility_gain_weight').value)
-
-        self.enable_goal_hysteresis = bool(
-            self.get_parameter('enable_goal_hysteresis').value
-        )
-        self.hysteresis_goal_match_distance_m = float(
-            self.get_parameter('hysteresis_goal_match_distance_m').value
-        )
-        self.hysteresis_switch_margin = float(
-            self.get_parameter('hysteresis_switch_margin').value
-        )
 
         self.marker_scale_m = float(self.get_parameter('marker_scale_m').value)
         self.publish_debug_every_n_maps = int(self.get_parameter('publish_debug_every_n_maps').value)
@@ -207,19 +192,12 @@ class FrontierDetector(Node):
 
         self.map_count = 0
 
-        # Persistent state for selected-goal hysteresis.
-        # We store the previous goal cell rather than cluster_id because
-        # cluster IDs can change when frontiers split/merge/re-sort.
-        self.previous_selected_goal_cell: Optional[Cell] = None
-        self.previous_selected_score: float = float('inf')
-
         self.get_logger().info('Frontier detector + A* path planner started.')
         self.get_logger().info(f'Subscribing to: {self.map_topic}')
         self.get_logger().info(f'Robot frame: {self.robot_frame}')
         self.get_logger().info(f'Require reachable: {self.require_reachable}')
         self.get_logger().info(f'Path planning enabled: {self.enable_path_planning}')
         self.get_logger().info(f'Selection policy: {self.selection_policy}')
-        self.get_logger().info(f'Goal hysteresis enabled: {self.enable_goal_hysteresis}')
 
     def map_callback(self, msg: OccupancyGrid) -> None:
         self.map_count += 1
@@ -271,7 +249,6 @@ class FrontierDetector(Node):
 
         candidate_goals = [candidate.goal_pose for candidate in candidates]
 
-        self.last_msg_for_distance = msg
         selected_candidate = self.select_candidate(candidates)
 
         selected_goal_pose = None
@@ -768,108 +745,53 @@ class FrontierDetector(Node):
 
     def select_candidate(self, candidates: List[FrontierCandidate]) -> Optional[FrontierCandidate]:
         if not candidates:
-            self.previous_selected_goal_cell = None
-            self.previous_selected_score = float('inf')
             return None
 
-        self.compute_candidate_scores(candidates)
-
-        best_candidate = self.find_best_candidate(candidates)
-
-        if best_candidate is None:
-            self.previous_selected_goal_cell = None
-            self.previous_selected_score = float('inf')
-            return None
-
-        if not self.enable_goal_hysteresis:
-            self.update_hysteresis_state(best_candidate)
-            return best_candidate
-
-        previous_candidate = self.find_previous_selected_candidate(candidates)
-
-        if previous_candidate is None:
-            self.update_hysteresis_state(best_candidate)
-            return best_candidate
-
-        # Lower score is better.
-        #
-        # Keep the previous candidate unless the new best candidate improves
-        # the score by more than the configured margin.
-        should_switch = (
-            best_candidate.score
-            < previous_candidate.score - self.hysteresis_switch_margin
-        )
-
-        if should_switch:
-            selected = best_candidate
-        else:
-            selected = previous_candidate
-
-        self.update_hysteresis_state(selected)
-        return selected
-
-    def compute_candidate_scores(self, candidates: List[FrontierCandidate]) -> None:
         if self.selection_policy == 'nearest':
-            for candidate in candidates:
-                candidate.score = candidate.path_length_m
-            return
+            return self.select_nearest_candidate(candidates)
 
         if self.selection_policy == 'utility':
-            for candidate in candidates:
-                candidate.score = (
-                    self.utility_distance_weight * candidate.path_length_m
-                    - self.utility_gain_weight * float(candidate.unknown_gain_cells)
-                )
-            return
+            return self.select_utility_candidate(candidates)
 
         self.get_logger().warn(
             f'Unknown selection_policy="{self.selection_policy}". Falling back to "nearest".'
         )
+        return self.select_nearest_candidate(candidates)
+
+    def select_nearest_candidate(
+        self,
+        candidates: List[FrontierCandidate],
+    ) -> Optional[FrontierCandidate]:
+        best_candidate = None
+        best_score = float('inf')
 
         for candidate in candidates:
             candidate.score = candidate.path_length_m
 
-    def find_best_candidate(
+            if candidate.score < best_score:
+                best_score = candidate.score
+                best_candidate = candidate
+
+        return best_candidate
+
+    def select_utility_candidate(
         self,
         candidates: List[FrontierCandidate],
     ) -> Optional[FrontierCandidate]:
-        if not candidates:
-            return None
-
-        return min(candidates, key=lambda candidate: candidate.score)
-
-    def find_previous_selected_candidate(
-        self,
-        candidates: List[FrontierCandidate],
-    ) -> Optional[FrontierCandidate]:
-        if self.previous_selected_goal_cell is None:
-            return None
-
-        best_match = None
-        best_distance = float('inf')
+        best_candidate = None
+        best_score = float('inf')
 
         for candidate in candidates:
-            distance = self.cell_distance_m(
-                self.last_msg_for_distance,
-                candidate.goal_cell,
-                self.previous_selected_goal_cell,
+            candidate.score = (
+                self.utility_distance_weight * candidate.path_length_m
+                - self.utility_gain_weight * float(candidate.unknown_gain_cells)
             )
 
-            if distance < best_distance:
-                best_distance = distance
-                best_match = candidate
+            if candidate.score < best_score:
+                best_score = candidate.score
+                best_candidate = candidate
 
-        if best_match is None:
-            return None
-
-        if best_distance > self.hysteresis_goal_match_distance_m:
-            return None
-
-        return best_match
-
-    def update_hysteresis_state(self, selected_candidate: FrontierCandidate) -> None:
-        self.previous_selected_goal_cell = selected_candidate.goal_cell
-        self.previous_selected_score = selected_candidate.score
+        return best_candidate
 
     # -------------------------------------------------------------------------
     # A* path planning
