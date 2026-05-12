@@ -67,6 +67,14 @@ class FrontierDetector(Node):
         self.declare_parameter("min_obstacle_clearance_m", 0.20)
         self.declare_parameter("min_robot_distance_m", 0.75)
 
+        # Frontier abstraction
+        self.declare_parameter("merge_nearby_frontier_clusters", True)
+        self.declare_parameter("frontier_cluster_merge_distance_m", 0.30)
+
+        # Cached candidate / selected-goal validity
+        self.declare_parameter("candidate_validity_radius_m", 0.75)
+        self.declare_parameter("goal_reached_distance_m", 0.60)
+
         # Goal generation
         self.declare_parameter("goal_search_radius_m", 1.20)
         self.declare_parameter("max_goals_to_publish", 10)
@@ -122,6 +130,20 @@ class FrontierDetector(Node):
         self.min_cluster_size_cells = int(self.get_parameter("min_cluster_size_cells").value)
         self.min_obstacle_clearance_m = float(self.get_parameter("min_obstacle_clearance_m").value)
         self.min_robot_distance_m = float(self.get_parameter("min_robot_distance_m").value)
+
+        self.merge_nearby_frontier_clusters = bool(
+            self.get_parameter("merge_nearby_frontier_clusters").value
+        )
+        self.frontier_cluster_merge_distance_m = float(
+            self.get_parameter("frontier_cluster_merge_distance_m").value
+        )
+
+        self.candidate_validity_radius_m = float(
+            self.get_parameter("candidate_validity_radius_m").value
+        )
+        self.goal_reached_distance_m = float(
+            self.get_parameter("goal_reached_distance_m").value
+        )
 
         self.goal_search_radius_m = float(self.get_parameter("goal_search_radius_m").value)
         self.max_goals_to_publish = int(self.get_parameter("max_goals_to_publish").value)
@@ -180,6 +202,7 @@ class FrontierDetector(Node):
         self.cached_selected_path_cells: List[Cell] = []
         self.has_planned_once = False
         self.last_plan_time_ns = 0
+        self.last_replan_reason = "none"
 
         self.cached_num_clusters = 0
         self.last_logged_selected_goal_cell: Optional[Cell] = None
@@ -229,6 +252,14 @@ class FrontierDetector(Node):
         self.get_logger().info(
             f"Planning throttle: plan_every_n_maps={self.plan_every_n_maps}, "
             f"min_plan_period_s={self.min_plan_period_s:.2f}"
+        )
+        self.get_logger().info(
+            f"Cluster merging: enabled={self.merge_nearby_frontier_clusters}, "
+            f"distance={self.frontier_cluster_merge_distance_m:.2f} m"
+        )
+        self.get_logger().info(
+            f"Candidate validity radius={self.candidate_validity_radius_m:.2f} m, "
+            f"goal reached distance={self.goal_reached_distance_m:.2f} m"
         )
 
         if self.enable_logging and self.log_dir is not None:
@@ -283,9 +314,16 @@ class FrontierDetector(Node):
         # Fast outputs update every map callback.
         self.publish_frontier_grid(msg, filtered_frontiers)
 
+        replan_reason = self.validate_cached_planning_outputs(
+            msg=msg,
+            filtered_frontiers=filtered_frontiers,
+            goal_safe_mask=goal_safe_mask,
+            robot_cell=robot_cell,
+        )
+
         planning_ran = False
 
-        if self.should_run_planning():
+        if self.should_run_planning() or replan_reason != "none":
             planning_ran = True
             planning_start_ns = time.perf_counter_ns()
 
@@ -317,6 +355,13 @@ class FrontierDetector(Node):
             )
 
             clusters = self.cluster_frontiers(planning_frontiers)
+
+            if self.merge_nearby_frontier_clusters:
+                clusters = self.merge_frontier_clusters(
+                    clusters=clusters,
+                    resolution=msg.info.resolution,
+                )
+
             clusters = [cluster for cluster in clusters if len(cluster) >= self.min_cluster_size_cells]
 
             candidates = self.build_candidates(
@@ -337,13 +382,24 @@ class FrontierDetector(Node):
             )
             self.cached_num_clusters = len(clusters)
 
+            first_planning_cycle = not self.has_planned_once
+
             self.has_planned_once = True
             self.last_plan_time_ns = self.get_clock().now().nanoseconds
+
+            if replan_reason != "none":
+                self.last_replan_reason = replan_reason
+            elif first_planning_cycle:
+                self.last_replan_reason = "first_plan"
+            else:
+                self.last_replan_reason = "periodic_replan"
+
             planning_time_ms = (time.perf_counter_ns() - planning_start_ns) * 1e-6
 
             if self.map_count % self.publish_debug_every_n_maps == 0:
                 self.get_logger().info(
-                    f"PLAN raw={len(raw_frontiers)}, filtered={len(filtered_frontiers)}, "
+                    f"PLAN reason={self.last_replan_reason}, "
+                    f"raw={len(raw_frontiers)}, filtered={len(filtered_frontiers)}, "
                     f"clusters={len(clusters)}, candidates={len(candidates)}"
                 )
 
@@ -1192,6 +1248,220 @@ class FrontierDetector(Node):
 
         clusters.sort(key=len, reverse=True)
         return clusters
+
+    def merge_frontier_clusters(
+        self,
+        clusters: List[List[Cell]],
+        resolution: float,
+    ) -> List[List[Cell]]:
+        if not clusters:
+            return []
+
+        merge_radius_cells = int(math.ceil(self.frontier_cluster_merge_distance_m / resolution))
+
+        if merge_radius_cells <= 0:
+            return clusters
+
+        merged_clusters = [list(cluster) for cluster in clusters]
+
+        changed = True
+        while changed:
+            changed = False
+            new_clusters: List[List[Cell]] = []
+            used = [False] * len(merged_clusters)
+
+            for i, cluster_a in enumerate(merged_clusters):
+                if used[i]:
+                    continue
+
+                combined = list(cluster_a)
+                used[i] = True
+
+                for j in range(i + 1, len(merged_clusters)):
+                    if used[j]:
+                        continue
+
+                    cluster_b = merged_clusters[j]
+
+                    if self.clusters_are_near(
+                        cluster_a=combined,
+                        cluster_b=cluster_b,
+                        merge_radius_cells=merge_radius_cells,
+                    ):
+                        combined.extend(cluster_b)
+                        used[j] = True
+                        changed = True
+
+                new_clusters.append(combined)
+
+            merged_clusters = new_clusters
+
+        merged_clusters.sort(key=len, reverse=True)
+        return merged_clusters
+
+    def clusters_are_near(
+        self,
+        cluster_a: List[Cell],
+        cluster_b: List[Cell],
+        merge_radius_cells: int,
+    ) -> bool:
+        ax_values = [cell[0] for cell in cluster_a]
+        ay_values = [cell[1] for cell in cluster_a]
+        bx_values = [cell[0] for cell in cluster_b]
+        by_values = [cell[1] for cell in cluster_b]
+
+        a_min_x, a_max_x = min(ax_values), max(ax_values)
+        a_min_y, a_max_y = min(ay_values), max(ay_values)
+        b_min_x, b_max_x = min(bx_values), max(bx_values)
+        b_min_y, b_max_y = min(by_values), max(by_values)
+
+        if a_min_x > b_max_x + merge_radius_cells:
+            return False
+        if b_min_x > a_max_x + merge_radius_cells:
+            return False
+        if a_min_y > b_max_y + merge_radius_cells:
+            return False
+        if b_min_y > a_max_y + merge_radius_cells:
+            return False
+
+        radius_sq = merge_radius_cells * merge_radius_cells
+
+        if len(cluster_a) <= len(cluster_b):
+            smaller = cluster_a
+            larger = cluster_b
+        else:
+            smaller = cluster_b
+            larger = cluster_a
+
+        for ax, ay in smaller:
+            for bx, by in larger:
+                dx = ax - bx
+                dy = ay - by
+
+                if dx * dx + dy * dy <= radius_sq:
+                    return True
+
+        return False
+
+    def validate_cached_planning_outputs(
+        self,
+        msg: OccupancyGrid,
+        filtered_frontiers: Set[Cell],
+        goal_safe_mask: np.ndarray,
+        robot_cell: Optional[Cell],
+    ) -> str:
+        if not self.has_planned_once:
+            return "first_plan"
+
+        if not self.cached_candidates:
+            self.cached_selected_candidate = None
+            self.cached_selected_path_cells = []
+            return "no_candidate"
+
+        still_valid_candidates: List[FrontierCandidate] = []
+
+        for candidate in self.cached_candidates:
+            if self.is_cached_candidate_valid(
+                msg=msg,
+                candidate=candidate,
+                filtered_frontiers=filtered_frontiers,
+                goal_safe_mask=goal_safe_mask,
+            ):
+                still_valid_candidates.append(candidate)
+
+        selected_invalid = False
+        selected_reached = False
+
+        if self.cached_selected_candidate is not None:
+            selected_cell = self.cached_selected_candidate.goal_cell
+
+            selected_still_present = any(
+                candidate.goal_cell == selected_cell
+                for candidate in still_valid_candidates
+            )
+
+            if not selected_still_present:
+                selected_invalid = True
+
+            if robot_cell is not None:
+                distance_to_goal = self.cell_distance_m(
+                    msg,
+                    robot_cell,
+                    selected_cell,
+                )
+
+                if distance_to_goal <= self.goal_reached_distance_m:
+                    selected_reached = True
+
+        removed_count = len(self.cached_candidates) - len(still_valid_candidates)
+
+        self.cached_candidates = still_valid_candidates
+
+        if selected_reached:
+            self.cached_selected_candidate = None
+            self.cached_selected_path_cells = []
+            return "goal_reached"
+
+        if selected_invalid:
+            self.cached_selected_candidate = None
+            self.cached_selected_path_cells = []
+            return "goal_invalidated"
+
+        if self.cached_selected_candidate is None and self.cached_candidates:
+            return "no_selected_candidate"
+
+        if removed_count > 0:
+            # Do not necessarily force a replan if only non-selected stale
+            # candidates disappeared. The marker list is already cleaned.
+            return "none"
+
+        return "none"
+
+    def is_cached_candidate_valid(
+        self,
+        msg: OccupancyGrid,
+        candidate: FrontierCandidate,
+        filtered_frontiers: Set[Cell],
+        goal_safe_mask: np.ndarray,
+    ) -> bool:
+        gx, gy = candidate.goal_cell
+
+        if not self.in_bounds(gx, gy, msg.info.width, msg.info.height):
+            return False
+
+        if not goal_safe_mask[gy, gx]:
+            return False
+
+        return self.has_frontier_near_cell(
+            msg=msg,
+            cell=candidate.goal_cell,
+            frontier_cells=filtered_frontiers,
+            radius_m=self.candidate_validity_radius_m,
+        )
+
+    def has_frontier_near_cell(
+        self,
+        msg: OccupancyGrid,
+        cell: Cell,
+        frontier_cells: Set[Cell],
+        radius_m: float,
+    ) -> bool:
+        if not frontier_cells:
+            return False
+
+        radius_cells = int(math.ceil(radius_m / msg.info.resolution))
+        radius_sq = radius_cells * radius_cells
+
+        cx, cy = cell
+
+        for fx, fy in frontier_cells:
+            dx = fx - cx
+            dy = fy - cy
+
+            if dx * dx + dy * dy <= radius_sq:
+                return True
+
+        return False
 
     # -------------------------------------------------------------------------
     # Candidate generation

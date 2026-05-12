@@ -3,7 +3,7 @@ frontier_detector:
     # Logging Options
     enable_logging: true
     log_root_dir: ~/Sam/fyp_ws/logs
-    
+
     # Input map
     map_topic: /exploration_grid
 
@@ -34,6 +34,10 @@ frontier_detector:
     use_8_connected_frontiers: true
     min_cluster_size_cells: 5
 
+    # Cluster Merging
+    merge_nearby_frontier_clusters: true
+    frontier_cluster_merge_distance_m: 0.30
+
     # Filtering
     min_obstacle_clearance_m: 0.15
     min_robot_distance_m: 0.75
@@ -41,6 +45,8 @@ frontier_detector:
     # Candidate goal generation
     goal_search_radius_m: 1.00
     max_goals_to_publish: 50
+    candidate_validity_radius_m: 0.75
+    goal_reached_distance_m: 0.60
 
     # A* path planning
     enable_path_planning: true
