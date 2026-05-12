@@ -64,16 +64,20 @@ class FrontierDetector(Node):
 
         # Goal generation
         self.declare_parameter("goal_search_radius_m", 1.20)
-        self.declare_parameter("max_goals_to_publish", 50)
+        self.declare_parameter("max_goals_to_publish", 10)
 
         # Path planning
-        self.declare_parameter("enable_path_planning", False)
+        self.declare_parameter("enable_path_planning", True)
         self.declare_parameter("allow_diagonal_motion", True)
         self.declare_parameter("prevent_diagonal_corner_cutting", True)
         self.declare_parameter("path_obstacle_clearance_m", 0.20)
 
+        # Planning throttling
+        self.declare_parameter("plan_every_n_maps", 3)
+        self.declare_parameter("min_plan_period_s", 0.75)
+
         # Reachability
-        self.declare_parameter("require_reachable", False)
+        self.declare_parameter("require_reachable", True)
 
         # Selection policy
         self.declare_parameter("selection_policy", "nearest")
@@ -81,7 +85,7 @@ class FrontierDetector(Node):
         self.declare_parameter("utility_gain_weight", 0.02)
 
         # Goal hysteresis
-        self.declare_parameter("enable_goal_hysteresis", False)
+        self.declare_parameter("enable_goal_hysteresis", True)
         self.declare_parameter("hysteresis_goal_match_distance_m", 0.75)
         self.declare_parameter("hysteresis_switch_margin", 0.75)
 
@@ -120,6 +124,9 @@ class FrontierDetector(Node):
         )
         self.path_obstacle_clearance_m = float(self.get_parameter("path_obstacle_clearance_m").value)
 
+        self.plan_every_n_maps = int(self.get_parameter("plan_every_n_maps").value)
+        self.min_plan_period_s = float(self.get_parameter("min_plan_period_s").value)
+
         self.require_reachable = bool(self.get_parameter("require_reachable").value)
 
         self.selection_policy = str(self.get_parameter("selection_policy").value)
@@ -145,12 +152,22 @@ class FrontierDetector(Node):
         self.selected_goal_pub = self.create_publisher(PoseStamped, self.selected_goal_topic, 10)
         self.path_pub = self.create_publisher(Path, self.frontier_path_topic, 10)
 
-        self.map_sub = self.create_subscription(OccupancyGrid, self.map_topic, self.map_callback, 10)
+        # Queue depth 1 is deliberate: frontier detection should use the newest map,
+        # not process stale queued maps.
+        self.map_sub = self.create_subscription(OccupancyGrid, self.map_topic, self.map_callback, 1)
 
         self.map_count = 0
         self.previous_selected_goal_cell: Optional[Cell] = None
         self.previous_selected_score: float = float("inf")
         self.current_msg_for_distance: Optional[OccupancyGrid] = None
+
+        # Cached planning outputs. These are updated only when planning is allowed
+        # to run, but are republished every map update using the latest map header.
+        self.cached_candidates: List[FrontierCandidate] = []
+        self.cached_selected_candidate: Optional[FrontierCandidate] = None
+        self.cached_selected_path_cells: List[Cell] = []
+        self.has_planned_once = False
+        self.last_plan_time_ns = 0
 
         self.get_logger().info("Frontier detector started.")
         self.get_logger().info(f"Subscribing to: {self.map_topic}")
@@ -158,6 +175,10 @@ class FrontierDetector(Node):
         self.get_logger().info(f"Require reachable: {self.require_reachable}")
         self.get_logger().info(f"Path planning enabled: {self.enable_path_planning}")
         self.get_logger().info(f"Goal hysteresis enabled: {self.enable_goal_hysteresis}")
+        self.get_logger().info(
+            f"Planning throttle: plan_every_n_maps={self.plan_every_n_maps}, "
+            f"min_plan_period_s={self.min_plan_period_s:.2f}"
+        )
 
     def map_callback(self, msg: OccupancyGrid) -> None:
         self.map_count += 1
@@ -187,72 +208,118 @@ class FrontierDetector(Node):
             resolution=msg.info.resolution,
         )
 
-        path_safe_mask = self.build_clearance_safe_mask(
-            free_mask=free_mask,
-            occupied_mask=occupied_mask,
-            clearance_m=self.path_obstacle_clearance_m,
-            resolution=msg.info.resolution,
-        )
-
-        reachable_cells = None
-        if self.require_reachable:
-            if robot_cell is None:
-                self.get_logger().warn(
-                    "require_reachable=True, but robot pose is unavailable. "
-                    "No selected goal/path will be generated for this map.",
-                    throttle_duration_sec=self.robot_pose_warn_period_s,
-                )
-            else:
-                reachable_cells = self.compute_reachable_free_cells(
-                    msg=msg,
-                    robot_cell=robot_cell,
-                    path_safe_mask=path_safe_mask,
-                )
-
-        filtered_frontiers = self.filter_frontiers(
+        filtered_frontiers = self.filter_frontiers_fast(
             msg=msg,
             frontier_cells=raw_frontiers,
             goal_safe_mask=goal_safe_mask,
             robot_cell=robot_cell,
-            reachable_cells=reachable_cells,
         )
 
-        # Publish the lightweight frontier grid as early as possible.
+        # Fast outputs update every map callback.
         self.publish_frontier_grid(msg, filtered_frontiers)
 
-        clusters = self.cluster_frontiers(filtered_frontiers)
-        clusters = [cluster for cluster in clusters if len(cluster) >= self.min_cluster_size_cells]
+        planning_ran = False
 
-        candidates = self.build_candidates(
-            msg=msg,
-            clusters=clusters,
-            goal_safe_mask=goal_safe_mask,
-            path_safe_mask=path_safe_mask,
-            robot_cell=robot_cell,
-            reachable_cells=reachable_cells,
+        if self.should_run_planning():
+            planning_ran = True
+
+            path_safe_mask = self.build_clearance_safe_mask(
+                free_mask=free_mask,
+                occupied_mask=occupied_mask,
+                clearance_m=self.path_obstacle_clearance_m,
+                resolution=msg.info.resolution,
+            )
+
+            reachable_cells = None
+            if self.require_reachable:
+                if robot_cell is None:
+                    self.get_logger().warn(
+                        "require_reachable=True, but robot pose is unavailable. "
+                        "No selected goal/path will be generated for this planning cycle.",
+                        throttle_duration_sec=self.robot_pose_warn_period_s,
+                    )
+                else:
+                    reachable_cells = self.compute_reachable_free_cells(
+                        msg=msg,
+                        robot_cell=robot_cell,
+                        path_safe_mask=path_safe_mask,
+                    )
+
+            planning_frontiers = self.apply_reachability_to_frontiers(
+                frontier_cells=filtered_frontiers,
+                reachable_cells=reachable_cells,
+            )
+
+            clusters = self.cluster_frontiers(planning_frontiers)
+            clusters = [cluster for cluster in clusters if len(cluster) >= self.min_cluster_size_cells]
+
+            candidates = self.build_candidates(
+                msg=msg,
+                clusters=clusters,
+                goal_safe_mask=goal_safe_mask,
+                path_safe_mask=path_safe_mask,
+                robot_cell=robot_cell,
+                reachable_cells=reachable_cells,
+            )
+
+            selected_candidate = self.select_candidate(candidates)
+
+            self.cached_candidates = candidates
+            self.cached_selected_candidate = selected_candidate
+            self.cached_selected_path_cells = (
+                selected_candidate.path_cells if selected_candidate is not None else []
+            )
+
+            self.has_planned_once = True
+            self.last_plan_time_ns = self.get_clock().now().nanoseconds
+
+            if self.map_count % self.publish_debug_every_n_maps == 0:
+                self.get_logger().info(
+                    f"PLAN raw={len(raw_frontiers)}, filtered={len(filtered_frontiers)}, "
+                    f"clusters={len(clusters)}, candidates={len(candidates)}"
+                )
+
+        selected_goal_pose = (
+            self.cached_selected_candidate.goal_pose
+            if self.cached_selected_candidate is not None
+            else None
         )
 
-        selected_candidate = self.select_candidate(candidates)
-
-        selected_goal_pose = selected_candidate.goal_pose if selected_candidate is not None else None
-        selected_path_cells = selected_candidate.path_cells if selected_candidate is not None else []
-
-        self.publish_goals(msg, [candidate.goal_pose for candidate in candidates])
+        self.publish_goals(msg, [candidate.goal_pose for candidate in self.cached_candidates])
         self.publish_selected_goal(msg, selected_goal_pose)
-        self.publish_path(msg, selected_path_cells)
+        self.publish_path(msg, self.cached_selected_path_cells)
         self.publish_markers(
             msg=msg,
             frontier_cells=filtered_frontiers,
-            candidates=candidates,
-            selected_candidate=selected_candidate,
-            selected_path_cells=selected_path_cells,
+            candidates=self.cached_candidates,
+            selected_candidate=self.cached_selected_candidate,
+            selected_path_cells=self.cached_selected_path_cells,
         )
 
-        if self.map_count % self.publish_debug_every_n_maps == 0:
+        if self.map_count % self.publish_debug_every_n_maps == 0 and not planning_ran:
             self.get_logger().info(
-                f"raw={len(raw_frontiers)}, filtered={len(filtered_frontiers)}, "
-                f"clusters={len(clusters)}, candidates={len(candidates)}"
+                f"FAST raw={len(raw_frontiers)}, filtered={len(filtered_frontiers)}, "
+                f"cached_candidates={len(self.cached_candidates)}"
             )
+
+    def should_run_planning(self) -> bool:
+        if not self.has_planned_once:
+            return True
+
+        if self.plan_every_n_maps <= 1 and self.min_plan_period_s <= 0.0:
+            return True
+
+        map_gate_open = True
+        if self.plan_every_n_maps > 1:
+            map_gate_open = (self.map_count % self.plan_every_n_maps) == 0
+
+        time_gate_open = True
+        if self.min_plan_period_s > 0.0:
+            now_ns = self.get_clock().now().nanoseconds
+            elapsed_s = (now_ns - self.last_plan_time_ns) * 1e-9
+            time_gate_open = elapsed_s >= self.min_plan_period_s
+
+        return map_gate_open and time_gate_open
 
     # -------------------------------------------------------------------------
     # Occupancy / coordinate helpers
@@ -340,7 +407,6 @@ class FrontierDetector(Node):
     ) -> Set[Cell]:
         adjacent_unknown = np.zeros_like(unknown_mask, dtype=bool)
 
-        # 4-connected unknown adjacency.
         adjacent_unknown[:, 1:] |= unknown_mask[:, :-1]
         adjacent_unknown[:, :-1] |= unknown_mask[:, 1:]
         adjacent_unknown[1:, :] |= unknown_mask[:-1, :]
@@ -353,7 +419,6 @@ class FrontierDetector(Node):
             adjacent_unknown[:-1, :-1] |= unknown_mask[1:, 1:]
 
         frontier_mask = free_mask & adjacent_unknown
-
         ys, xs = np.nonzero(frontier_mask)
         return set(zip(xs.astype(int).tolist(), ys.astype(int).tolist()))
 
@@ -400,21 +465,17 @@ class FrontierDetector(Node):
 
         return free_mask & (~blocked)
 
-    def filter_frontiers(
+    def filter_frontiers_fast(
         self,
         msg: OccupancyGrid,
         frontier_cells: Set[Cell],
         goal_safe_mask: np.ndarray,
         robot_cell: Optional[Cell],
-        reachable_cells: Optional[Set[Cell]],
     ) -> Set[Cell]:
         filtered: Set[Cell] = set()
 
         for x, y in frontier_cells:
             cell = (x, y)
-
-            if reachable_cells is not None and cell not in reachable_cells:
-                continue
 
             if robot_cell is not None:
                 if self.cell_distance_m(msg, cell, robot_cell) < self.min_robot_distance_m:
@@ -426,6 +487,16 @@ class FrontierDetector(Node):
             filtered.add(cell)
 
         return filtered
+
+    def apply_reachability_to_frontiers(
+        self,
+        frontier_cells: Set[Cell],
+        reachable_cells: Optional[Set[Cell]],
+    ) -> Set[Cell]:
+        if reachable_cells is None:
+            return frontier_cells
+
+        return {cell for cell in frontier_cells if cell in reachable_cells}
 
     def cell_distance_m(self, msg: OccupancyGrid, a: Cell, b: Cell) -> float:
         return math.hypot(
