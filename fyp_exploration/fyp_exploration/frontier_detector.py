@@ -4,6 +4,7 @@ import csv
 import heapq
 import math
 import re
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -183,6 +184,33 @@ class FrontierDetector(Node):
         self.cached_num_clusters = 0
         self.last_logged_selected_goal_cell: Optional[Cell] = None
 
+        # Robot travel / exploration-progress state.
+        self.previous_robot_x: Optional[float] = None
+        self.previous_robot_y: Optional[float] = None
+        self.previous_robot_yaw: Optional[float] = None
+        self.total_robot_distance_m = 0.0
+        self.total_abs_yaw_change_rad = 0.0
+
+        self.initial_known_area_m2: Optional[float] = None
+        self.initial_free_area_m2: Optional[float] = None
+        self.initial_unknown_area_m2: Optional[float] = None
+        self.run_start_ros_time_ns: Optional[int] = None
+
+        # Selected-goal lifecycle state.
+        self.selected_goal_start_time_ns: Optional[int] = None
+        self.selected_goal_start_map_count: Optional[int] = None
+
+        # Rejection/timing diagnostics.
+        self.last_candidate_rejection_counts = {
+            "clusters_total": 0,
+            "clusters_not_evaluated_due_limit": 0,
+            "clusters_no_safe_or_reachable_goal": 0,
+            "clusters_no_path": 0,
+            "clusters_accepted": 0,
+        }
+        self.current_callback_total_time_ms = 0.0
+        self.current_planning_time_ms = 0.0
+
         self.log_dir: Optional[FilePath] = None
         self.map_metrics_file = None
         self.candidate_metrics_file = None
@@ -207,6 +235,9 @@ class FrontierDetector(Node):
             self.get_logger().info(f"Logging to: {self.log_dir}")
 
     def map_callback(self, msg: OccupancyGrid) -> None:
+        callback_start_ns = time.perf_counter_ns()
+        planning_time_ms = 0.0
+
         self.map_count += 1
         self.current_msg_for_distance = msg
 
@@ -256,6 +287,7 @@ class FrontierDetector(Node):
 
         if self.should_run_planning():
             planning_ran = True
+            planning_start_ns = time.perf_counter_ns()
 
             path_safe_mask = self.build_clearance_safe_mask(
                 free_mask=free_mask,
@@ -307,6 +339,7 @@ class FrontierDetector(Node):
 
             self.has_planned_once = True
             self.last_plan_time_ns = self.get_clock().now().nanoseconds
+            planning_time_ms = (time.perf_counter_ns() - planning_start_ns) * 1e-6
 
             if self.map_count % self.publish_debug_every_n_maps == 0:
                 self.get_logger().info(
@@ -330,6 +363,9 @@ class FrontierDetector(Node):
             selected_candidate=self.cached_selected_candidate,
             selected_path_cells=self.cached_selected_path_cells,
         )
+
+        self.current_callback_total_time_ms = (time.perf_counter_ns() - callback_start_ns) * 1e-6
+        self.current_planning_time_ms = planning_time_ms
 
         self.log_map_metrics(
             msg=msg,
@@ -446,7 +482,28 @@ class FrontierDetector(Node):
                 "selected_unknown_gain_cells",
                 "selected_score",
                 "selected_goal_changed",
+                "selected_goal_age_s",
+                "selected_goal_age_maps",
+                "distance_to_selected_goal_m",
                 "selection_policy",
+                "robot_delta_distance_m",
+                "total_robot_distance_m",
+                "robot_delta_yaw_rad",
+                "total_abs_yaw_change_rad",
+                "known_area_gain_m2",
+                "free_area_gain_m2",
+                "unknown_area_reduction_m2",
+                "known_area_gain_rate_m2_per_s",
+                "unknown_area_reduction_rate_m2_per_s",
+                "known_area_gain_per_m_travelled",
+                "unknown_area_reduction_per_m_travelled",
+                "clusters_total",
+                "clusters_not_evaluated_due_limit",
+                "clusters_no_safe_or_reachable_goal",
+                "clusters_no_path",
+                "clusters_accepted",
+                "callback_total_time_ms",
+                "planning_time_ms",
             ],
         )
 
@@ -472,6 +529,14 @@ class FrontierDetector(Node):
                 "cluster_size_cells",
                 "unknown_gain_cells",
                 "unknown_gain_area_m2",
+                "unknown_gain_per_path_m",
+                "unknown_gain_area_per_path_m",
+                "frontier_length_m",
+                "bearing_to_goal_rad",
+                "heading_error_to_goal_rad",
+                "candidate_rank_by_distance",
+                "candidate_rank_by_gain",
+                "candidate_rank_by_score",
                 "score",
                 "selection_policy",
             ],
@@ -500,6 +565,43 @@ class FrontierDetector(Node):
 
         return max_id + 1
 
+    def angle_diff(self, a: float, b: float) -> float:
+        return math.atan2(math.sin(a - b), math.cos(a - b))
+
+    def update_robot_travel_metrics(
+        self,
+        robot_x: Optional[float],
+        robot_y: Optional[float],
+        robot_yaw: Optional[float],
+    ) -> Tuple[float, float]:
+        if robot_x is None or robot_y is None or robot_yaw is None:
+            return 0.0, 0.0
+
+        if (
+            self.previous_robot_x is None
+            or self.previous_robot_y is None
+            or self.previous_robot_yaw is None
+        ):
+            self.previous_robot_x = robot_x
+            self.previous_robot_y = robot_y
+            self.previous_robot_yaw = robot_yaw
+            return 0.0, 0.0
+
+        dx = robot_x - self.previous_robot_x
+        dy = robot_y - self.previous_robot_y
+        delta_distance_m = math.hypot(dx, dy)
+
+        delta_yaw_rad = self.angle_diff(robot_yaw, self.previous_robot_yaw)
+
+        self.total_robot_distance_m += delta_distance_m
+        self.total_abs_yaw_change_rad += abs(delta_yaw_rad)
+
+        self.previous_robot_x = robot_x
+        self.previous_robot_y = robot_y
+        self.previous_robot_yaw = robot_yaw
+
+        return delta_distance_m, delta_yaw_rad
+
     def log_map_metrics(
         self,
         msg: OccupancyGrid,
@@ -517,6 +619,8 @@ class FrontierDetector(Node):
         if not self.enable_logging or self.map_metrics_writer is None:
             return
 
+        ros_time_ns = self.get_clock().now().nanoseconds
+
         free_cells = int(np.count_nonzero(free_mask))
         occupied_cells = int(np.count_nonzero(occupied_mask))
         unknown_cells = int(np.count_nonzero(unknown_mask))
@@ -524,26 +628,88 @@ class FrontierDetector(Node):
 
         cell_area_m2 = msg.info.resolution * msg.info.resolution
 
+        free_area_m2 = free_cells * cell_area_m2
+        occupied_area_m2 = occupied_cells * cell_area_m2
+        unknown_area_m2 = unknown_cells * cell_area_m2
+        known_area_m2 = known_cells * cell_area_m2
+
+        if self.run_start_ros_time_ns is None:
+            self.run_start_ros_time_ns = ros_time_ns
+            self.initial_known_area_m2 = known_area_m2
+            self.initial_free_area_m2 = free_area_m2
+            self.initial_unknown_area_m2 = unknown_area_m2
+
+        elapsed_s = max((ros_time_ns - self.run_start_ros_time_ns) * 1e-9, 0.0)
+
+        known_area_gain_m2 = known_area_m2 - float(self.initial_known_area_m2)
+        free_area_gain_m2 = free_area_m2 - float(self.initial_free_area_m2)
+        unknown_area_reduction_m2 = float(self.initial_unknown_area_m2) - unknown_area_m2
+
+        known_area_gain_rate_m2_per_s = ""
+        unknown_area_reduction_rate_m2_per_s = ""
+
+        if elapsed_s > 1e-9:
+            known_area_gain_rate_m2_per_s = known_area_gain_m2 / elapsed_s
+            unknown_area_reduction_rate_m2_per_s = unknown_area_reduction_m2 / elapsed_s
+
+        robot_delta_distance_m, robot_delta_yaw_rad = self.update_robot_travel_metrics(
+            robot_x=robot_x,
+            robot_y=robot_y,
+            robot_yaw=robot_yaw,
+        )
+
+        known_area_gain_per_m_travelled = ""
+        unknown_area_reduction_per_m_travelled = ""
+
+        if self.total_robot_distance_m > 1e-9:
+            known_area_gain_per_m_travelled = known_area_gain_m2 / self.total_robot_distance_m
+            unknown_area_reduction_per_m_travelled = (
+                unknown_area_reduction_m2 / self.total_robot_distance_m
+            )
+
         selected = self.cached_selected_candidate
 
         selected_goal_changed = False
+
         if selected is not None:
             selected_goal_changed = selected.goal_cell != self.last_logged_selected_goal_cell
+
+            if selected_goal_changed or self.selected_goal_start_time_ns is None:
+                self.selected_goal_start_time_ns = ros_time_ns
+                self.selected_goal_start_map_count = self.map_count
+
             self.last_logged_selected_goal_cell = selected.goal_cell
         else:
             selected_goal_changed = self.last_logged_selected_goal_cell is not None
             self.last_logged_selected_goal_cell = None
+            self.selected_goal_start_time_ns = None
+            self.selected_goal_start_map_count = None
 
         selected_goal_yaw = None
+        selected_goal_age_s = ""
+        selected_goal_age_maps = ""
+        distance_to_selected_goal_m = ""
+
         if selected is not None:
             selected_goal_yaw = self.pose_yaw(selected.goal_pose)
+
+            if self.selected_goal_start_time_ns is not None:
+                selected_goal_age_s = (ros_time_ns - self.selected_goal_start_time_ns) * 1e-9
+
+            if self.selected_goal_start_map_count is not None:
+                selected_goal_age_maps = self.map_count - self.selected_goal_start_map_count
+
+            if robot_x is not None and robot_y is not None:
+                dx = selected.goal_pose.position.x - robot_x
+                dy = selected.goal_pose.position.y - robot_y
+                distance_to_selected_goal_m = math.hypot(dx, dy)
 
         self.map_metrics_writer.writerow(
             {
                 "run_id": self.run_id,
                 "stamp_sec": msg.header.stamp.sec,
                 "stamp_nanosec": msg.header.stamp.nanosec,
-                "ros_time_ns": self.get_clock().now().nanoseconds,
+                "ros_time_ns": ros_time_ns,
                 "map_count": self.map_count,
                 "planning_ran": int(planning_ran),
                 "map_frame": msg.header.frame_id,
@@ -558,10 +724,10 @@ class FrontierDetector(Node):
                 "filtered_frontier_cells": len(filtered_frontiers),
                 "num_frontier_clusters": self.cached_num_clusters,
                 "num_candidate_goals": len(self.cached_candidates),
-                "free_area_m2": free_cells * cell_area_m2,
-                "occupied_area_m2": occupied_cells * cell_area_m2,
-                "unknown_area_m2": unknown_cells * cell_area_m2,
-                "known_area_m2": known_cells * cell_area_m2,
+                "free_area_m2": free_area_m2,
+                "occupied_area_m2": occupied_area_m2,
+                "unknown_area_m2": unknown_area_m2,
+                "known_area_m2": known_area_m2,
                 "frontier_length_m": len(filtered_frontiers) * msg.info.resolution,
                 "robot_cell_x": robot_cell[0] if robot_cell is not None else "",
                 "robot_cell_y": robot_cell[1] if robot_cell is not None else "",
@@ -578,7 +744,32 @@ class FrontierDetector(Node):
                 "selected_unknown_gain_cells": selected.unknown_gain_cells if selected is not None else "",
                 "selected_score": selected.score if selected is not None else "",
                 "selected_goal_changed": int(selected_goal_changed),
+                "selected_goal_age_s": selected_goal_age_s,
+                "selected_goal_age_maps": selected_goal_age_maps,
+                "distance_to_selected_goal_m": distance_to_selected_goal_m,
                 "selection_policy": self.selection_policy,
+                "robot_delta_distance_m": robot_delta_distance_m,
+                "total_robot_distance_m": self.total_robot_distance_m,
+                "robot_delta_yaw_rad": robot_delta_yaw_rad,
+                "total_abs_yaw_change_rad": self.total_abs_yaw_change_rad,
+                "known_area_gain_m2": known_area_gain_m2,
+                "free_area_gain_m2": free_area_gain_m2,
+                "unknown_area_reduction_m2": unknown_area_reduction_m2,
+                "known_area_gain_rate_m2_per_s": known_area_gain_rate_m2_per_s,
+                "unknown_area_reduction_rate_m2_per_s": unknown_area_reduction_rate_m2_per_s,
+                "known_area_gain_per_m_travelled": known_area_gain_per_m_travelled,
+                "unknown_area_reduction_per_m_travelled": unknown_area_reduction_per_m_travelled,
+                "clusters_total": self.last_candidate_rejection_counts["clusters_total"],
+                "clusters_not_evaluated_due_limit": self.last_candidate_rejection_counts[
+                    "clusters_not_evaluated_due_limit"
+                ],
+                "clusters_no_safe_or_reachable_goal": self.last_candidate_rejection_counts[
+                    "clusters_no_safe_or_reachable_goal"
+                ],
+                "clusters_no_path": self.last_candidate_rejection_counts["clusters_no_path"],
+                "clusters_accepted": self.last_candidate_rejection_counts["clusters_accepted"],
+                "callback_total_time_ms": self.current_callback_total_time_ms,
+                "planning_time_ms": self.current_planning_time_ms,
             }
         )
 
@@ -600,17 +791,61 @@ class FrontierDetector(Node):
 
         cell_area_m2 = msg.info.resolution * msg.info.resolution
 
+        finite_path_candidates = [
+            candidate
+            for candidate in self.cached_candidates
+            if math.isfinite(candidate.path_length_m)
+        ]
+
+        rank_by_distance = {
+            id(candidate): rank
+            for rank, candidate in enumerate(
+                sorted(finite_path_candidates, key=lambda item: item.path_length_m),
+                start=1,
+            )
+        }
+
+        rank_by_gain = {
+            id(candidate): rank
+            for rank, candidate in enumerate(
+                sorted(
+                    self.cached_candidates,
+                    key=lambda item: item.unknown_gain_cells,
+                    reverse=True,
+                ),
+                start=1,
+            )
+        }
+
+        rank_by_score = {
+            id(candidate): rank
+            for rank, candidate in enumerate(
+                sorted(self.cached_candidates, key=lambda item: item.score),
+                start=1,
+            )
+        }
+
         for i, candidate in enumerate(self.cached_candidates):
             goal_yaw = self.pose_yaw(candidate.goal_pose)
 
             euclidean_distance_m = ""
             path_to_euclidean_ratio = ""
+            bearing_to_goal_rad = ""
+            heading_error_to_goal_rad = ""
 
             if robot_x is not None and robot_y is not None:
                 dx = candidate.goal_pose.position.x - robot_x
                 dy = candidate.goal_pose.position.y - robot_y
                 euclidean = math.hypot(dx, dy)
                 euclidean_distance_m = euclidean
+
+                bearing_to_goal_rad = math.atan2(dy, dx)
+
+                if self.previous_robot_yaw is not None:
+                    heading_error_to_goal_rad = self.angle_diff(
+                        bearing_to_goal_rad,
+                        self.previous_robot_yaw,
+                    )
 
                 if euclidean > 1e-9 and math.isfinite(candidate.path_length_m):
                     path_to_euclidean_ratio = candidate.path_length_m / euclidean
@@ -621,6 +856,16 @@ class FrontierDetector(Node):
 
                 if euclidean > 1e-9 and math.isfinite(candidate.path_length_m):
                     path_to_euclidean_ratio = candidate.path_length_m / euclidean
+
+            frontier_length_m = candidate.cluster_size_cells * msg.info.resolution
+            unknown_gain_area_m2 = candidate.unknown_gain_cells * cell_area_m2
+
+            unknown_gain_per_path_m = ""
+            unknown_gain_area_per_path_m = ""
+
+            if math.isfinite(candidate.path_length_m) and candidate.path_length_m > 1e-9:
+                unknown_gain_per_path_m = candidate.unknown_gain_cells / candidate.path_length_m
+                unknown_gain_area_per_path_m = unknown_gain_area_m2 / candidate.path_length_m
 
             self.candidate_metrics_writer.writerow(
                 {
@@ -642,7 +887,15 @@ class FrontierDetector(Node):
                     "path_to_euclidean_ratio": path_to_euclidean_ratio,
                     "cluster_size_cells": candidate.cluster_size_cells,
                     "unknown_gain_cells": candidate.unknown_gain_cells,
-                    "unknown_gain_area_m2": candidate.unknown_gain_cells * cell_area_m2,
+                    "unknown_gain_area_m2": unknown_gain_area_m2,
+                    "unknown_gain_per_path_m": unknown_gain_per_path_m,
+                    "unknown_gain_area_per_path_m": unknown_gain_area_per_path_m,
+                    "frontier_length_m": frontier_length_m,
+                    "bearing_to_goal_rad": bearing_to_goal_rad,
+                    "heading_error_to_goal_rad": heading_error_to_goal_rad,
+                    "candidate_rank_by_distance": rank_by_distance.get(id(candidate), ""),
+                    "candidate_rank_by_gain": rank_by_gain.get(id(candidate), ""),
+                    "candidate_rank_by_score": rank_by_score.get(id(candidate), ""),
                     "score": candidate.score,
                     "selection_policy": self.selection_policy,
                 }
@@ -955,8 +1208,19 @@ class FrontierDetector(Node):
     ) -> List[FrontierCandidate]:
         candidates: List[FrontierCandidate] = []
 
+        self.last_candidate_rejection_counts = {
+            "clusters_total": len(clusters),
+            "clusters_not_evaluated_due_limit": 0,
+            "clusters_no_safe_or_reachable_goal": 0,
+            "clusters_no_path": 0,
+            "clusters_accepted": 0,
+        }
+
         for cluster_id, cluster in enumerate(clusters):
             if len(candidates) >= self.max_goals_to_publish:
+                self.last_candidate_rejection_counts[
+                    "clusters_not_evaluated_due_limit"
+                ] = max(len(clusters) - cluster_id, 0)
                 break
 
             goal_cell = self.find_goal_cell_for_cluster(
@@ -967,6 +1231,9 @@ class FrontierDetector(Node):
             )
 
             if goal_cell is None:
+                self.last_candidate_rejection_counts[
+                    "clusters_no_safe_or_reachable_goal"
+                ] += 1
                 continue
 
             goal_pose = self.cell_to_pose_facing_unknown(msg, goal_cell, cluster)
@@ -984,6 +1251,7 @@ class FrontierDetector(Node):
                 )
 
                 if not path_cells:
+                    self.last_candidate_rejection_counts["clusters_no_path"] += 1
                     continue
 
             candidate = FrontierCandidate(
@@ -997,6 +1265,7 @@ class FrontierDetector(Node):
             )
 
             candidates.append(candidate)
+            self.last_candidate_rejection_counts["clusters_accepted"] += 1
 
         return candidates
 

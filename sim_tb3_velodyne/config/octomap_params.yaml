@@ -7,7 +7,7 @@ octomap_server:
     sensor_model.miss: 0.4
     sensor_model.min: 0.12
     sensor_model.max: 0.97
-    occupancy_min_z: 0.05
+    occupancy_min_z: 0.10
     occupancy_max_z: 2.0
     pointcloud_min_z: -100.0
     pointcloud_max_z: 100.0
