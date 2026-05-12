@@ -62,6 +62,34 @@ frontier_detector:
     # Reachability filtering
     require_reachable: true
 
+
+    # Region Selection
+    use_region_hierarchy: true
+    frontier_regions_markers_topic: /frontier_regions_markers
+    use_path_distance_for_regions: true
+    frontier_region_merge_path_distance_m: 5.0
+    max_region_pair_checks: 80
+
+
+    # Controls how candidate goals are grouped into larger frontier regions.
+    # Increase if every goal becomes its own region.
+    # Decrease if separate rooms/corridors get incorrectly grouped together.
+    frontier_region_merge_distance_m: 5.0
+
+    # Region-level hysteresis.
+    # Helps stop switching between nearby frontier regions every planning cycle.
+    region_switch_margin: 1.0
+    region_switch_penalty: 1.0
+
+    # Region score:
+    # score = region_distance_weight * min_path_length
+    #       - region_gain_weight * total_unknown_gain
+    # Lower score is better.
+    region_distance_weight: 1.0
+    region_gain_weight: 0.02
+
+
+
     # Selection policy
     #
     # nearest:

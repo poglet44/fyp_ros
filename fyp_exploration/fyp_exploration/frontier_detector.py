@@ -37,6 +37,18 @@ class FrontierCandidate:
     cluster_size_cells: int
     unknown_gain_cells: int
     score: float = float("inf")
+    region_id: int = -1
+
+
+@dataclass
+class FrontierRegion:
+    region_id: int
+    candidate_indices: List[int]
+    centroid_cell: Cell
+    total_frontier_cells: int
+    total_unknown_gain_cells: int
+    min_path_length_m: float
+    score: float = float("inf")
 
 
 class FrontierDetector(Node):
@@ -97,6 +109,18 @@ class FrontierDetector(Node):
         self.declare_parameter("utility_distance_weight", 1.0)
         self.declare_parameter("utility_gain_weight", 0.02)
 
+        # Hierarchical frontier region selection
+        self.declare_parameter("use_region_hierarchy", True)
+        self.declare_parameter("frontier_regions_markers_topic", "/frontier_regions_markers")
+        self.declare_parameter("frontier_region_merge_distance_m", 1.50)
+        self.declare_parameter("use_path_distance_for_regions", True)
+        self.declare_parameter("frontier_region_merge_path_distance_m", 4.00)
+        self.declare_parameter("max_region_pair_checks", 80)
+        self.declare_parameter("region_switch_margin", 1.00)
+        self.declare_parameter("region_switch_penalty", 1.00)
+        self.declare_parameter("region_distance_weight", 1.0)
+        self.declare_parameter("region_gain_weight", 0.02)
+
         # Goal hysteresis
         self.declare_parameter("enable_goal_hysteresis", True)
         self.declare_parameter("hysteresis_goal_match_distance_m", 0.75)
@@ -117,6 +141,9 @@ class FrontierDetector(Node):
         self.frontier_goals_topic = self.get_parameter("frontier_goals_topic").value
         self.selected_goal_topic = self.get_parameter("selected_goal_topic").value
         self.frontier_path_topic = self.get_parameter("frontier_path_topic").value
+        self.frontier_regions_markers_topic = self.get_parameter(
+            "frontier_regions_markers_topic"
+        ).value
 
         self.robot_frame = self.get_parameter("robot_frame").value
         self.tf_lookup_timeout_s = float(self.get_parameter("tf_lookup_timeout_s").value)
@@ -164,6 +191,22 @@ class FrontierDetector(Node):
         self.utility_distance_weight = float(self.get_parameter("utility_distance_weight").value)
         self.utility_gain_weight = float(self.get_parameter("utility_gain_weight").value)
 
+        self.use_region_hierarchy = bool(self.get_parameter("use_region_hierarchy").value)
+        self.frontier_region_merge_distance_m = float(
+            self.get_parameter("frontier_region_merge_distance_m").value
+        )
+        self.use_path_distance_for_regions = bool(
+            self.get_parameter("use_path_distance_for_regions").value
+        )
+        self.frontier_region_merge_path_distance_m = float(
+            self.get_parameter("frontier_region_merge_path_distance_m").value
+        )
+        self.max_region_pair_checks = int(self.get_parameter("max_region_pair_checks").value)
+        self.region_switch_margin = float(self.get_parameter("region_switch_margin").value)
+        self.region_switch_penalty = float(self.get_parameter("region_switch_penalty").value)
+        self.region_distance_weight = float(self.get_parameter("region_distance_weight").value)
+        self.region_gain_weight = float(self.get_parameter("region_gain_weight").value)
+
         self.enable_goal_hysteresis = bool(self.get_parameter("enable_goal_hysteresis").value)
         self.hysteresis_goal_match_distance_m = float(
             self.get_parameter("hysteresis_goal_match_distance_m").value
@@ -185,6 +228,11 @@ class FrontierDetector(Node):
         self.goal_pub = self.create_publisher(PoseArray, self.frontier_goals_topic, 10)
         self.selected_goal_pub = self.create_publisher(PoseStamped, self.selected_goal_topic, 10)
         self.path_pub = self.create_publisher(Path, self.frontier_path_topic, 10)
+        self.region_marker_pub = self.create_publisher(
+            MarkerArray,
+            self.frontier_regions_markers_topic,
+            10,
+        )
 
         # Queue depth 1 is deliberate: frontier detection should use the newest map,
         # not process stale queued maps.
@@ -200,6 +248,10 @@ class FrontierDetector(Node):
         self.cached_candidates: List[FrontierCandidate] = []
         self.cached_selected_candidate: Optional[FrontierCandidate] = None
         self.cached_selected_path_cells: List[Cell] = []
+        self.cached_frontier_regions: List[FrontierRegion] = []
+        self.cached_selected_region_id: Optional[int] = None
+        self.previous_active_region_centroid_cell: Optional[Cell] = None
+        self.previous_active_region_score: float = float("inf")
         self.has_planned_once = False
         self.last_plan_time_ns = 0
         self.last_replan_reason = "none"
@@ -256,6 +308,12 @@ class FrontierDetector(Node):
         self.get_logger().info(
             f"Cluster merging: enabled={self.merge_nearby_frontier_clusters}, "
             f"distance={self.frontier_cluster_merge_distance_m:.2f} m"
+        )
+        self.get_logger().info(
+            f"Region hierarchy: enabled={self.use_region_hierarchy}, "
+            f"euclidean_merge_distance={self.frontier_region_merge_distance_m:.2f} m, "
+            f"use_path_distance={self.use_path_distance_for_regions}, "
+            f"path_merge_distance={self.frontier_region_merge_path_distance_m:.2f} m"
         )
         self.get_logger().info(
             f"Candidate validity radius={self.candidate_validity_radius_m:.2f} m, "
@@ -373,9 +431,25 @@ class FrontierDetector(Node):
                 reachable_cells=reachable_cells,
             )
 
-            selected_candidate = self.select_candidate(candidates)
+            frontier_regions = self.build_frontier_regions(
+                msg=msg,
+                candidates=candidates,
+                path_safe_mask=path_safe_mask,
+            )
+
+            if self.use_region_hierarchy:
+                selected_candidate = self.select_candidate_hierarchical(
+                    candidates=candidates,
+                    regions=frontier_regions,
+                )
+            else:
+                selected_candidate = self.select_candidate(candidates)
+                self.cached_selected_region_id = (
+                    selected_candidate.region_id if selected_candidate is not None else None
+                )
 
             self.cached_candidates = candidates
+            self.cached_frontier_regions = frontier_regions
             self.cached_selected_candidate = selected_candidate
             self.cached_selected_path_cells = (
                 selected_candidate.path_cells if selected_candidate is not None else []
@@ -418,6 +492,11 @@ class FrontierDetector(Node):
             candidates=self.cached_candidates,
             selected_candidate=self.cached_selected_candidate,
             selected_path_cells=self.cached_selected_path_cells,
+        )
+        self.publish_region_markers(
+            msg=msg,
+            regions=self.cached_frontier_regions,
+            candidates=self.cached_candidates,
         )
 
         self.current_callback_total_time_ms = (time.perf_counter_ns() - callback_start_ns) * 1e-6
@@ -1635,6 +1714,350 @@ class FrontierDetector(Node):
         return q
 
     # -------------------------------------------------------------------------
+    # Frontier region hierarchy
+    # -------------------------------------------------------------------------
+
+    def build_frontier_regions(
+        self,
+        msg: OccupancyGrid,
+        candidates: List[FrontierCandidate],
+        path_safe_mask: np.ndarray,
+    ) -> List[FrontierRegion]:
+        if not candidates:
+            return []
+
+        adjacency = self.build_candidate_region_adjacency(
+            msg=msg,
+            candidates=candidates,
+            path_safe_mask=path_safe_mask,
+        )
+
+        unassigned = set(range(len(candidates)))
+        raw_regions: List[List[int]] = []
+
+        while unassigned:
+            start_index = unassigned.pop()
+            region_indices = [start_index]
+            queue = deque([start_index])
+
+            while queue:
+                current_index = queue.popleft()
+
+                for other_index in adjacency[current_index]:
+                    if other_index not in unassigned:
+                        continue
+
+                    unassigned.remove(other_index)
+                    queue.append(other_index)
+                    region_indices.append(other_index)
+
+            raw_regions.append(region_indices)
+
+        regions: List[FrontierRegion] = []
+
+        for region_id, candidate_indices in enumerate(raw_regions):
+            total_weight = 0
+            weighted_x = 0.0
+            weighted_y = 0.0
+            total_frontier_cells = 0
+            total_unknown_gain_cells = 0
+            min_path_length_m = float("inf")
+
+            for candidate_index in candidate_indices:
+                candidate = candidates[candidate_index]
+                weight = max(candidate.cluster_size_cells, 1)
+
+                weighted_x += candidate.goal_cell[0] * weight
+                weighted_y += candidate.goal_cell[1] * weight
+                total_weight += weight
+
+                total_frontier_cells += candidate.cluster_size_cells
+                total_unknown_gain_cells += candidate.unknown_gain_cells
+                min_path_length_m = min(min_path_length_m, candidate.path_length_m)
+
+            centroid_cell = (
+                int(round(weighted_x / float(total_weight))),
+                int(round(weighted_y / float(total_weight))),
+            )
+
+            region = FrontierRegion(
+                region_id=region_id,
+                candidate_indices=candidate_indices,
+                centroid_cell=centroid_cell,
+                total_frontier_cells=total_frontier_cells,
+                total_unknown_gain_cells=total_unknown_gain_cells,
+                min_path_length_m=min_path_length_m,
+            )
+
+            regions.append(region)
+
+            for candidate_index in candidate_indices:
+                candidates[candidate_index].region_id = region_id
+
+        regions.sort(key=lambda region: region.total_unknown_gain_cells, reverse=True)
+
+        for new_region_id, region in enumerate(regions):
+            region.region_id = new_region_id
+
+            for candidate_index in region.candidate_indices:
+                candidates[candidate_index].region_id = new_region_id
+
+        return regions
+
+    def build_candidate_region_adjacency(
+        self,
+        msg: OccupancyGrid,
+        candidates: List[FrontierCandidate],
+        path_safe_mask: np.ndarray,
+    ) -> Dict[int, Set[int]]:
+        adjacency: Dict[int, Set[int]] = {
+            index: set() for index in range(len(candidates))
+        }
+
+        if len(candidates) <= 1:
+            return adjacency
+
+        pair_checks = 0
+
+        for i in range(len(candidates)):
+            for j in range(i + 1, len(candidates)):
+                if pair_checks >= self.max_region_pair_checks:
+                    return adjacency
+
+                pair_checks += 1
+
+                if self.candidates_should_share_region(
+                    msg=msg,
+                    candidate_a=candidates[i],
+                    candidate_b=candidates[j],
+                    path_safe_mask=path_safe_mask,
+                ):
+                    adjacency[i].add(j)
+                    adjacency[j].add(i)
+
+        return adjacency
+
+    def candidates_should_share_region(
+        self,
+        msg: OccupancyGrid,
+        candidate_a: FrontierCandidate,
+        candidate_b: FrontierCandidate,
+        path_safe_mask: np.ndarray,
+    ) -> bool:
+        euclidean_distance_m = self.cell_distance_m(
+            msg,
+            candidate_a.goal_cell,
+            candidate_b.goal_cell,
+        )
+
+        if not self.use_path_distance_for_regions:
+            return euclidean_distance_m <= self.frontier_region_merge_distance_m
+
+        # Cheap rejection: if straight-line distance already exceeds the allowed
+        # path distance, the free-space path cannot be shorter than that.
+        if euclidean_distance_m > self.frontier_region_merge_path_distance_m:
+            return False
+
+        path_distance_m = self.bounded_path_distance_m(
+            msg=msg,
+            start=candidate_a.goal_cell,
+            goal=candidate_b.goal_cell,
+            path_safe_mask=path_safe_mask,
+            max_distance_m=self.frontier_region_merge_path_distance_m,
+        )
+
+        return path_distance_m <= self.frontier_region_merge_path_distance_m
+
+    def bounded_path_distance_m(
+        self,
+        msg: OccupancyGrid,
+        start: Cell,
+        goal: Cell,
+        path_safe_mask: np.ndarray,
+        max_distance_m: float,
+    ) -> float:
+        width = msg.info.width
+        height = msg.info.height
+        resolution = msg.info.resolution
+
+        if not self.in_bounds(start[0], start[1], width, height):
+            return float("inf")
+
+        if not self.in_bounds(goal[0], goal[1], width, height):
+            return float("inf")
+
+        if not path_safe_mask[start[1], start[0]]:
+            return float("inf")
+
+        if not path_safe_mask[goal[1], goal[0]]:
+            return float("inf")
+
+        max_cost_cells = max_distance_m / resolution
+
+        open_heap: List[Tuple[float, float, Cell]] = []
+        heapq.heappush(open_heap, (0.0, 0.0, start))
+
+        best_cost: Dict[Cell, float] = {start: 0.0}
+        closed: Set[Cell] = set()
+
+        while open_heap:
+            _, current_cost, current = heapq.heappop(open_heap)
+
+            if current in closed:
+                continue
+
+            if current_cost > max_cost_cells:
+                continue
+
+            if current == goal:
+                return current_cost * resolution
+
+            closed.add(current)
+
+            for neighbour, step_cost in self.astar_neighbours(
+                msg=msg,
+                cell=current,
+                path_safe_mask=path_safe_mask,
+            ):
+                if neighbour in closed:
+                    continue
+
+                next_cost = current_cost + step_cost
+
+                if next_cost > max_cost_cells:
+                    continue
+
+                if next_cost >= best_cost.get(neighbour, float("inf")):
+                    continue
+
+                best_cost[neighbour] = next_cost
+                priority = next_cost + self.heuristic_cells(neighbour, goal)
+                heapq.heappush(open_heap, (priority, next_cost, neighbour))
+
+        return float("inf")
+
+    def select_candidate_hierarchical(
+        self,
+        candidates: List[FrontierCandidate],
+        regions: List[FrontierRegion],
+    ) -> Optional[FrontierCandidate]:
+        if not candidates or not regions:
+            self.previous_selected_goal_cell = None
+            self.previous_selected_score = float("inf")
+            self.previous_active_region_centroid_cell = None
+            self.previous_active_region_score = float("inf")
+            self.cached_selected_region_id = None
+            return None
+
+        self.compute_candidate_scores(candidates)
+        self.compute_region_scores(regions)
+
+        best_region = min(regions, key=lambda region: region.score)
+        previous_region = self.find_previous_active_region(regions)
+
+        if previous_region is None:
+            selected_region = best_region
+        else:
+            should_switch = (
+                best_region.score
+                < previous_region.score - self.region_switch_margin
+            )
+            selected_region = best_region if should_switch else previous_region
+
+        selected_candidate = self.select_best_candidate_inside_region(
+            candidates=candidates,
+            region=selected_region,
+        )
+
+        if selected_candidate is None:
+            self.cached_selected_region_id = None
+            self.previous_active_region_centroid_cell = None
+            self.previous_active_region_score = float("inf")
+            return self.select_candidate(candidates)
+
+        self.cached_selected_region_id = selected_region.region_id
+        self.previous_active_region_centroid_cell = selected_region.centroid_cell
+        self.previous_active_region_score = selected_region.score
+        self.update_hysteresis_state(selected_candidate)
+
+        return selected_candidate
+
+    def compute_region_scores(self, regions: List[FrontierRegion]) -> None:
+        for region in regions:
+            score = (
+                self.region_distance_weight * region.min_path_length_m
+                - self.region_gain_weight * float(region.total_unknown_gain_cells)
+            )
+
+            if self.previous_active_region_centroid_cell is not None:
+                if region.centroid_cell != self.previous_active_region_centroid_cell:
+                    score += self.region_switch_penalty
+
+            region.score = score
+
+    def find_previous_active_region(
+        self,
+        regions: List[FrontierRegion],
+    ) -> Optional[FrontierRegion]:
+        if self.previous_active_region_centroid_cell is None:
+            return None
+
+        if self.current_msg_for_distance is None:
+            return None
+
+        best_match = None
+        best_distance_m = float("inf")
+
+        for region in regions:
+            distance_m = self.cell_distance_m(
+                self.current_msg_for_distance,
+                region.centroid_cell,
+                self.previous_active_region_centroid_cell,
+            )
+
+            if distance_m < best_distance_m:
+                best_distance_m = distance_m
+                best_match = region
+
+        if best_match is None:
+            return None
+
+        if best_distance_m > self.frontier_region_merge_distance_m:
+            return None
+
+        return best_match
+
+    def select_best_candidate_inside_region(
+        self,
+        candidates: List[FrontierCandidate],
+        region: FrontierRegion,
+    ) -> Optional[FrontierCandidate]:
+        region_candidates = [
+            candidates[candidate_index]
+            for candidate_index in region.candidate_indices
+            if 0 <= candidate_index < len(candidates)
+        ]
+
+        if not region_candidates:
+            return None
+
+        previous_candidate = self.find_previous_selected_candidate(region_candidates)
+        best_candidate = min(region_candidates, key=lambda candidate: candidate.score)
+
+        if not self.enable_goal_hysteresis:
+            return best_candidate
+
+        if previous_candidate is None:
+            return best_candidate
+
+        should_switch = (
+            best_candidate.score
+            < previous_candidate.score - self.hysteresis_switch_margin
+        )
+
+        return best_candidate if should_switch else previous_candidate
+
+    # -------------------------------------------------------------------------
     # Selection
     # -------------------------------------------------------------------------
 
@@ -1891,6 +2314,123 @@ class FrontierDetector(Node):
 
         self.path_pub.publish(path)
 
+    def region_colour(self, region_id: int) -> Tuple[float, float, float]:
+        palette = [
+            (0.0, 0.8, 1.0),
+            (1.0, 0.6, 0.0),
+            (0.3, 1.0, 0.3),
+            (1.0, 0.2, 0.7),
+            (0.7, 0.4, 1.0),
+            (1.0, 1.0, 0.2),
+            (0.2, 1.0, 0.8),
+            (1.0, 0.35, 0.2),
+        ]
+        return palette[region_id % len(palette)]
+
+    def publish_region_markers(
+        self,
+        msg: OccupancyGrid,
+        regions: List[FrontierRegion],
+        candidates: List[FrontierCandidate],
+    ) -> None:
+        marker_array = MarkerArray()
+
+        delete_marker = Marker()
+        delete_marker.header = msg.header
+        delete_marker.ns = "frontier_regions"
+        delete_marker.id = 0
+        delete_marker.action = Marker.DELETEALL
+        marker_array.markers.append(delete_marker)
+
+        for region in regions:
+            r, g, b = self.region_colour(region.region_id)
+            is_selected_region = region.region_id == self.cached_selected_region_id
+
+            centroid_x, centroid_y = self.cell_to_world(
+                msg,
+                region.centroid_cell[0],
+                region.centroid_cell[1],
+            )
+
+            centroid = Marker()
+            centroid.header = msg.header
+            centroid.ns = "frontier_region_centroids"
+            centroid.id = 100 + region.region_id
+            centroid.type = Marker.SPHERE
+            centroid.action = Marker.ADD
+            centroid.pose.position.x = centroid_x
+            centroid.pose.position.y = centroid_y
+            centroid.pose.position.z = 0.35
+            centroid.pose.orientation.w = 1.0
+            centroid.scale.x = 0.45 if is_selected_region else 0.30
+            centroid.scale.y = 0.45 if is_selected_region else 0.30
+            centroid.scale.z = 0.45 if is_selected_region else 0.30
+            centroid.color.r = 1.0 if is_selected_region else r
+            centroid.color.g = 0.0 if is_selected_region else g
+            centroid.color.b = 1.0 if is_selected_region else b
+            centroid.color.a = 1.0
+            marker_array.markers.append(centroid)
+
+            lines = Marker()
+            lines.header = msg.header
+            lines.ns = "frontier_region_candidate_links"
+            lines.id = 200 + region.region_id
+            lines.type = Marker.LINE_LIST
+            lines.action = Marker.ADD
+            lines.scale.x = 0.035
+            lines.color.r = r
+            lines.color.g = g
+            lines.color.b = b
+            lines.color.a = 0.85
+
+            for candidate_index in region.candidate_indices:
+                if candidate_index < 0 or candidate_index >= len(candidates):
+                    continue
+
+                candidate = candidates[candidate_index]
+
+                p0 = Point()
+                p0.x = centroid_x
+                p0.y = centroid_y
+                p0.z = 0.25
+
+                p1 = Point()
+                p1.x = candidate.goal_pose.position.x
+                p1.y = candidate.goal_pose.position.y
+                p1.z = 0.25
+
+                lines.points.append(p0)
+                lines.points.append(p1)
+
+            marker_array.markers.append(lines)
+
+            if self.publish_text_labels:
+                text = Marker()
+                text.header = msg.header
+                text.ns = "frontier_region_labels"
+                text.id = 300 + region.region_id
+                text.type = Marker.TEXT_VIEW_FACING
+                text.action = Marker.ADD
+                text.pose.position.x = centroid_x
+                text.pose.position.y = centroid_y
+                text.pose.position.z = 0.75
+                text.pose.orientation.w = 1.0
+                text.scale.z = 0.25
+                text.color.r = 1.0
+                text.color.g = 1.0
+                text.color.b = 1.0
+                text.color.a = 1.0
+                text.text = (
+                    f"R{region.region_id}\n"
+                    f"goals={len(region.candidate_indices)}\n"
+                    f"gain={region.total_unknown_gain_cells}\n"
+                    f"d={region.min_path_length_m:.1f}m\n"
+                    f"s={region.score:.2f}"
+                )
+                marker_array.markers.append(text)
+
+        self.region_marker_pub.publish(marker_array)
+
     def publish_markers(
         self,
         msg: OccupancyGrid,
@@ -1964,9 +2504,10 @@ class FrontierDetector(Node):
                 text.color.b = 1.0
                 text.color.a = 1.0
                 text.text = (
-                    f"F{candidate.cluster_id}\\n"
+                    f"R{candidate.region_id} F{candidate.cluster_id}\\n"
                     f"{candidate.path_length_m:.1f}m\\n"
-                    f"g={candidate.unknown_gain_cells}"
+                    f"g={candidate.unknown_gain_cells}\\n"
+                    f"s={candidate.score:.2f}"
                 )
                 marker_array.markers.append(text)
 
