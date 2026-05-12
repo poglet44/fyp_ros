@@ -32,14 +32,14 @@ frontier_detector:
 
     # Frontier extraction
     use_8_connected_frontiers: true
-    min_cluster_size_cells: 5
+    min_cluster_size_cells: 3
 
     # Cluster Merging
     merge_nearby_frontier_clusters: true
     frontier_cluster_merge_distance_m: 0.30
 
     # Filtering
-    min_obstacle_clearance_m: 0.15
+    min_obstacle_clearance_m: 0.10
     min_robot_distance_m: 0.75
 
     # Candidate goal generation
@@ -52,7 +52,7 @@ frontier_detector:
     enable_path_planning: true
     allow_diagonal_motion: true
     prevent_diagonal_corner_cutting: true
-    path_obstacle_clearance_m: 0.20
+    path_obstacle_clearance_m: 0.10
 
     # Planning Optimisation
     plan_every_n_maps: 3
