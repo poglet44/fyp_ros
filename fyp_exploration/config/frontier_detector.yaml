@@ -1,5 +1,9 @@
 frontier_detector:
   ros__parameters:
+    # Logging Options
+    enable_logging: true
+    log_root_dir: ~/Sam/fyp_ws/logs
+    
     # Input map
     map_topic: /exploration_grid
 

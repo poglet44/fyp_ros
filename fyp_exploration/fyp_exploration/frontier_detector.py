@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 
+import csv
 import heapq
 import math
+import re
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path as FilePath
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
@@ -94,6 +98,10 @@ class FrontierDetector(Node):
         self.declare_parameter("publish_debug_every_n_maps", 10)
         self.declare_parameter("publish_text_labels", False)
 
+        # CSV logging
+        self.declare_parameter("enable_logging", True)
+        self.declare_parameter("log_root_dir", "~/Sam/fyp_ws/logs")
+
         self.map_topic = self.get_parameter("map_topic").value
         self.frontier_cells_topic = self.get_parameter("frontier_cells_topic").value
         self.frontier_markers_topic = self.get_parameter("frontier_markers_topic").value
@@ -143,6 +151,9 @@ class FrontierDetector(Node):
         self.publish_debug_every_n_maps = int(self.get_parameter("publish_debug_every_n_maps").value)
         self.publish_text_labels = bool(self.get_parameter("publish_text_labels").value)
 
+        self.enable_logging = bool(self.get_parameter("enable_logging").value)
+        self.log_root_dir = str(self.get_parameter("log_root_dir").value)
+
         self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
@@ -169,6 +180,18 @@ class FrontierDetector(Node):
         self.has_planned_once = False
         self.last_plan_time_ns = 0
 
+        self.cached_num_clusters = 0
+        self.last_logged_selected_goal_cell: Optional[Cell] = None
+
+        self.log_dir: Optional[FilePath] = None
+        self.map_metrics_file = None
+        self.candidate_metrics_file = None
+        self.map_metrics_writer = None
+        self.candidate_metrics_writer = None
+        self.run_id: Optional[int] = None
+
+        self.setup_logging()
+
         self.get_logger().info("Frontier detector started.")
         self.get_logger().info(f"Subscribing to: {self.map_topic}")
         self.get_logger().info(f"Robot frame: {self.robot_frame}")
@@ -179,6 +202,9 @@ class FrontierDetector(Node):
             f"Planning throttle: plan_every_n_maps={self.plan_every_n_maps}, "
             f"min_plan_period_s={self.min_plan_period_s:.2f}"
         )
+
+        if self.enable_logging and self.log_dir is not None:
+            self.get_logger().info(f"Logging to: {self.log_dir}")
 
     def map_callback(self, msg: OccupancyGrid) -> None:
         self.map_count += 1
@@ -197,7 +223,15 @@ class FrontierDetector(Node):
         unknown_mask = grid == self.unknown_value
         occupied_mask = grid >= self.occupied_min_value
 
-        robot_cell = self.lookup_robot_cell(msg)
+        robot_pose = self.lookup_robot_pose(msg)
+
+        robot_cell = None
+        robot_x = None
+        robot_y = None
+        robot_yaw = None
+
+        if robot_pose is not None:
+            robot_cell, robot_x, robot_y, robot_yaw = robot_pose
 
         raw_frontiers = self.detect_raw_frontiers_numpy(free_mask, unknown_mask)
 
@@ -269,6 +303,7 @@ class FrontierDetector(Node):
             self.cached_selected_path_cells = (
                 selected_candidate.path_cells if selected_candidate is not None else []
             )
+            self.cached_num_clusters = len(clusters)
 
             self.has_planned_once = True
             self.last_plan_time_ns = self.get_clock().now().nanoseconds
@@ -296,6 +331,28 @@ class FrontierDetector(Node):
             selected_path_cells=self.cached_selected_path_cells,
         )
 
+        self.log_map_metrics(
+            msg=msg,
+            free_mask=free_mask,
+            unknown_mask=unknown_mask,
+            occupied_mask=occupied_mask,
+            raw_frontiers=raw_frontiers,
+            filtered_frontiers=filtered_frontiers,
+            planning_ran=planning_ran,
+            robot_cell=robot_cell,
+            robot_x=robot_x,
+            robot_y=robot_y,
+            robot_yaw=robot_yaw,
+        )
+
+        if planning_ran:
+            self.log_candidate_metrics(
+                msg=msg,
+                robot_cell=robot_cell,
+                robot_x=robot_x,
+                robot_y=robot_y,
+            )
+
         if self.map_count % self.publish_debug_every_n_maps == 0 and not planning_ran:
             self.get_logger().info(
                 f"FAST raw={len(raw_frontiers)}, filtered={len(filtered_frontiers)}, "
@@ -320,6 +377,297 @@ class FrontierDetector(Node):
             time_gate_open = elapsed_s >= self.min_plan_period_s
 
         return map_gate_open and time_gate_open
+
+    # -------------------------------------------------------------------------
+    # CSV logging
+    # -------------------------------------------------------------------------
+
+    def setup_logging(self) -> None:
+        if not self.enable_logging:
+            return
+
+        root = FilePath(self.log_root_dir).expanduser()
+        root.mkdir(parents=True, exist_ok=True)
+
+        self.run_id = self.next_run_id(root)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.log_dir = root / f"run_{self.run_id:03d}_{timestamp}"
+        self.log_dir.mkdir(parents=True, exist_ok=False)
+
+        self.map_metrics_file = open(
+            self.log_dir / "map_metrics.csv",
+            mode="w",
+            newline="",
+        )
+        self.candidate_metrics_file = open(
+            self.log_dir / "frontier_candidate_metrics.csv",
+            mode="w",
+            newline="",
+        )
+
+        self.map_metrics_writer = csv.DictWriter(
+            self.map_metrics_file,
+            fieldnames=[
+                "run_id",
+                "stamp_sec",
+                "stamp_nanosec",
+                "ros_time_ns",
+                "map_count",
+                "planning_ran",
+                "map_frame",
+                "width_cells",
+                "height_cells",
+                "resolution_m",
+                "free_cells",
+                "occupied_cells",
+                "unknown_cells",
+                "known_cells",
+                "raw_frontier_cells",
+                "filtered_frontier_cells",
+                "num_frontier_clusters",
+                "num_candidate_goals",
+                "free_area_m2",
+                "occupied_area_m2",
+                "unknown_area_m2",
+                "known_area_m2",
+                "frontier_length_m",
+                "robot_cell_x",
+                "robot_cell_y",
+                "robot_x",
+                "robot_y",
+                "robot_yaw",
+                "selected_cluster_id",
+                "selected_goal_cell_x",
+                "selected_goal_cell_y",
+                "selected_goal_x",
+                "selected_goal_y",
+                "selected_goal_yaw",
+                "selected_path_length_m",
+                "selected_unknown_gain_cells",
+                "selected_score",
+                "selected_goal_changed",
+                "selection_policy",
+            ],
+        )
+
+        self.candidate_metrics_writer = csv.DictWriter(
+            self.candidate_metrics_file,
+            fieldnames=[
+                "run_id",
+                "stamp_sec",
+                "stamp_nanosec",
+                "ros_time_ns",
+                "map_count",
+                "candidate_index",
+                "cluster_id",
+                "is_selected",
+                "goal_cell_x",
+                "goal_cell_y",
+                "goal_x",
+                "goal_y",
+                "goal_yaw",
+                "path_length_m",
+                "euclidean_distance_m",
+                "path_to_euclidean_ratio",
+                "cluster_size_cells",
+                "unknown_gain_cells",
+                "unknown_gain_area_m2",
+                "score",
+                "selection_policy",
+            ],
+        )
+
+        self.map_metrics_writer.writeheader()
+        self.candidate_metrics_writer.writeheader()
+
+        self.map_metrics_file.flush()
+        self.candidate_metrics_file.flush()
+
+    def next_run_id(self, root: FilePath) -> int:
+        max_id = 0
+        pattern = re.compile(r"^run_(\d+)_")
+
+        for child in root.iterdir():
+            if not child.is_dir():
+                continue
+
+            match = pattern.match(child.name)
+
+            if match is None:
+                continue
+
+            max_id = max(max_id, int(match.group(1)))
+
+        return max_id + 1
+
+    def log_map_metrics(
+        self,
+        msg: OccupancyGrid,
+        free_mask: np.ndarray,
+        unknown_mask: np.ndarray,
+        occupied_mask: np.ndarray,
+        raw_frontiers: Set[Cell],
+        filtered_frontiers: Set[Cell],
+        planning_ran: bool,
+        robot_cell: Optional[Cell],
+        robot_x: Optional[float],
+        robot_y: Optional[float],
+        robot_yaw: Optional[float],
+    ) -> None:
+        if not self.enable_logging or self.map_metrics_writer is None:
+            return
+
+        free_cells = int(np.count_nonzero(free_mask))
+        occupied_cells = int(np.count_nonzero(occupied_mask))
+        unknown_cells = int(np.count_nonzero(unknown_mask))
+        known_cells = free_cells + occupied_cells
+
+        cell_area_m2 = msg.info.resolution * msg.info.resolution
+
+        selected = self.cached_selected_candidate
+
+        selected_goal_changed = False
+        if selected is not None:
+            selected_goal_changed = selected.goal_cell != self.last_logged_selected_goal_cell
+            self.last_logged_selected_goal_cell = selected.goal_cell
+        else:
+            selected_goal_changed = self.last_logged_selected_goal_cell is not None
+            self.last_logged_selected_goal_cell = None
+
+        selected_goal_yaw = None
+        if selected is not None:
+            selected_goal_yaw = self.pose_yaw(selected.goal_pose)
+
+        self.map_metrics_writer.writerow(
+            {
+                "run_id": self.run_id,
+                "stamp_sec": msg.header.stamp.sec,
+                "stamp_nanosec": msg.header.stamp.nanosec,
+                "ros_time_ns": self.get_clock().now().nanoseconds,
+                "map_count": self.map_count,
+                "planning_ran": int(planning_ran),
+                "map_frame": msg.header.frame_id,
+                "width_cells": msg.info.width,
+                "height_cells": msg.info.height,
+                "resolution_m": msg.info.resolution,
+                "free_cells": free_cells,
+                "occupied_cells": occupied_cells,
+                "unknown_cells": unknown_cells,
+                "known_cells": known_cells,
+                "raw_frontier_cells": len(raw_frontiers),
+                "filtered_frontier_cells": len(filtered_frontiers),
+                "num_frontier_clusters": self.cached_num_clusters,
+                "num_candidate_goals": len(self.cached_candidates),
+                "free_area_m2": free_cells * cell_area_m2,
+                "occupied_area_m2": occupied_cells * cell_area_m2,
+                "unknown_area_m2": unknown_cells * cell_area_m2,
+                "known_area_m2": known_cells * cell_area_m2,
+                "frontier_length_m": len(filtered_frontiers) * msg.info.resolution,
+                "robot_cell_x": robot_cell[0] if robot_cell is not None else "",
+                "robot_cell_y": robot_cell[1] if robot_cell is not None else "",
+                "robot_x": robot_x if robot_x is not None else "",
+                "robot_y": robot_y if robot_y is not None else "",
+                "robot_yaw": robot_yaw if robot_yaw is not None else "",
+                "selected_cluster_id": selected.cluster_id if selected is not None else "",
+                "selected_goal_cell_x": selected.goal_cell[0] if selected is not None else "",
+                "selected_goal_cell_y": selected.goal_cell[1] if selected is not None else "",
+                "selected_goal_x": selected.goal_pose.position.x if selected is not None else "",
+                "selected_goal_y": selected.goal_pose.position.y if selected is not None else "",
+                "selected_goal_yaw": selected_goal_yaw if selected_goal_yaw is not None else "",
+                "selected_path_length_m": selected.path_length_m if selected is not None else "",
+                "selected_unknown_gain_cells": selected.unknown_gain_cells if selected is not None else "",
+                "selected_score": selected.score if selected is not None else "",
+                "selected_goal_changed": int(selected_goal_changed),
+                "selection_policy": self.selection_policy,
+            }
+        )
+
+        self.map_metrics_file.flush()
+
+    def log_candidate_metrics(
+        self,
+        msg: OccupancyGrid,
+        robot_cell: Optional[Cell],
+        robot_x: Optional[float],
+        robot_y: Optional[float],
+    ) -> None:
+        if not self.enable_logging or self.candidate_metrics_writer is None:
+            return
+
+        selected_cell = None
+        if self.cached_selected_candidate is not None:
+            selected_cell = self.cached_selected_candidate.goal_cell
+
+        cell_area_m2 = msg.info.resolution * msg.info.resolution
+
+        for i, candidate in enumerate(self.cached_candidates):
+            goal_yaw = self.pose_yaw(candidate.goal_pose)
+
+            euclidean_distance_m = ""
+            path_to_euclidean_ratio = ""
+
+            if robot_x is not None and robot_y is not None:
+                dx = candidate.goal_pose.position.x - robot_x
+                dy = candidate.goal_pose.position.y - robot_y
+                euclidean = math.hypot(dx, dy)
+                euclidean_distance_m = euclidean
+
+                if euclidean > 1e-9 and math.isfinite(candidate.path_length_m):
+                    path_to_euclidean_ratio = candidate.path_length_m / euclidean
+
+            elif robot_cell is not None:
+                euclidean = self.cell_distance_m(msg, robot_cell, candidate.goal_cell)
+                euclidean_distance_m = euclidean
+
+                if euclidean > 1e-9 and math.isfinite(candidate.path_length_m):
+                    path_to_euclidean_ratio = candidate.path_length_m / euclidean
+
+            self.candidate_metrics_writer.writerow(
+                {
+                    "run_id": self.run_id,
+                    "stamp_sec": msg.header.stamp.sec,
+                    "stamp_nanosec": msg.header.stamp.nanosec,
+                    "ros_time_ns": self.get_clock().now().nanoseconds,
+                    "map_count": self.map_count,
+                    "candidate_index": i,
+                    "cluster_id": candidate.cluster_id,
+                    "is_selected": int(candidate.goal_cell == selected_cell),
+                    "goal_cell_x": candidate.goal_cell[0],
+                    "goal_cell_y": candidate.goal_cell[1],
+                    "goal_x": candidate.goal_pose.position.x,
+                    "goal_y": candidate.goal_pose.position.y,
+                    "goal_yaw": goal_yaw,
+                    "path_length_m": candidate.path_length_m,
+                    "euclidean_distance_m": euclidean_distance_m,
+                    "path_to_euclidean_ratio": path_to_euclidean_ratio,
+                    "cluster_size_cells": candidate.cluster_size_cells,
+                    "unknown_gain_cells": candidate.unknown_gain_cells,
+                    "unknown_gain_area_m2": candidate.unknown_gain_cells * cell_area_m2,
+                    "score": candidate.score,
+                    "selection_policy": self.selection_policy,
+                }
+            )
+
+        self.candidate_metrics_file.flush()
+
+    def pose_yaw(self, pose: Pose) -> float:
+        return self.quaternion_to_yaw(pose.orientation)
+
+    def quaternion_to_yaw(self, q: Quaternion) -> float:
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        return math.atan2(siny_cosp, cosy_cosp)
+
+    def destroy_node(self) -> bool:
+        if self.map_metrics_file is not None:
+            self.map_metrics_file.flush()
+            self.map_metrics_file.close()
+
+        if self.candidate_metrics_file is not None:
+            self.candidate_metrics_file.flush()
+            self.candidate_metrics_file.close()
+
+        return super().destroy_node()
 
     # -------------------------------------------------------------------------
     # Occupancy / coordinate helpers
@@ -374,6 +722,18 @@ class FrontierDetector(Node):
         return wx, wy
 
     def lookup_robot_cell(self, msg: OccupancyGrid) -> Optional[Cell]:
+        robot_pose = self.lookup_robot_pose(msg)
+
+        if robot_pose is None:
+            return None
+
+        robot_cell, _, _, _ = robot_pose
+        return robot_cell
+
+    def lookup_robot_pose(
+        self,
+        msg: OccupancyGrid,
+    ) -> Optional[Tuple[Cell, float, float, float]]:
         map_frame = msg.header.frame_id
 
         if map_frame == "":
@@ -387,11 +747,16 @@ class FrontierDetector(Node):
                 timeout=Duration(seconds=self.tf_lookup_timeout_s),
             )
 
-            return self.world_to_cell(
-                msg,
-                transform.transform.translation.x,
-                transform.transform.translation.y,
-            )
+            robot_x = transform.transform.translation.x
+            robot_y = transform.transform.translation.y
+            robot_yaw = self.quaternion_to_yaw(transform.transform.rotation)
+
+            robot_cell = self.world_to_cell(msg, robot_x, robot_y)
+
+            if robot_cell is None:
+                return None
+
+            return robot_cell, robot_x, robot_y, robot_yaw
 
         except Exception:
             return None
