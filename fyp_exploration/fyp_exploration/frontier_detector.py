@@ -143,6 +143,7 @@ class FrontierDetector(Node):
         self.declare_parameter("region_switch_penalty", 1.00)
         self.declare_parameter("region_distance_weight", 1.0)
         self.declare_parameter("region_gain_weight", 0.02)
+        self.declare_parameter("region_candidate_mean_weight", 0.35)
 
         # Goal hysteresis
         self.declare_parameter("enable_goal_hysteresis", True)
@@ -250,6 +251,13 @@ class FrontierDetector(Node):
         self.region_switch_penalty = float(self.get_parameter("region_switch_penalty").value)
         self.region_distance_weight = float(self.get_parameter("region_distance_weight").value)
         self.region_gain_weight = float(self.get_parameter("region_gain_weight").value)
+        self.region_candidate_mean_weight = float(
+            self.get_parameter("region_candidate_mean_weight").value
+        )
+        self.region_candidate_mean_weight = max(
+            0.0,
+            min(1.0, self.region_candidate_mean_weight),
+        )
 
         self.enable_goal_hysteresis = bool(self.get_parameter("enable_goal_hysteresis").value)
         self.hysteresis_goal_match_distance_m = float(
@@ -383,7 +391,8 @@ class FrontierDetector(Node):
             f"Region hierarchy: enabled={self.use_region_hierarchy}, "
             f"euclidean_merge_distance={self.frontier_region_merge_distance_m:.2f} m, "
             f"use_path_distance={self.use_path_distance_for_regions}, "
-            f"path_merge_distance={self.frontier_region_merge_path_distance_m:.2f} m"
+            f"path_merge_distance={self.frontier_region_merge_path_distance_m:.2f} m, "
+            f"candidate_mean_weight={self.region_candidate_mean_weight:.2f}"
         )
         self.get_logger().info(
             f"Candidate validity radius={self.candidate_validity_radius_m:.2f} m, "
@@ -2438,7 +2447,10 @@ class FrontierDetector(Node):
             return None
 
         self.compute_candidate_scores(candidates)
-        self.compute_region_scores(regions)
+        self.compute_region_scores(
+            regions=regions,
+            candidates=candidates,
+        )
 
         best_region = min(regions, key=lambda region: region.score)
         previous_region = self.find_previous_active_region(regions)
@@ -2470,10 +2482,55 @@ class FrontierDetector(Node):
 
         return selected_candidate
 
-    def compute_region_scores(self, regions: List[FrontierRegion]) -> None:
+    def compute_region_scores(
+        self,
+        regions: List[FrontierRegion],
+        candidates: List[FrontierCandidate],
+    ) -> None:
         for region in regions:
+            region_candidates = [
+                candidates[candidate_index]
+                for candidate_index in region.candidate_indices
+                if 0 <= candidate_index < len(candidates)
+            ]
+
+            if not region_candidates:
+                region.score = float("inf")
+                continue
+
+            finite_scores = [
+                candidate.score
+                for candidate in region_candidates
+                if math.isfinite(candidate.score)
+            ]
+
+            if not finite_scores:
+                region.score = float("inf")
+                continue
+
+            # Candidate scores are already computed using the selected candidate policy:
+            #   nearest -> path length
+            #   utility -> distance/gain utility cost
+            #
+            # Lower candidate score is better.
+            #
+            # The region score uses a best+mean blend:
+            #   - best score represents the cheapest/best entry candidate
+            #   - mean score represents the general quality of all candidates in the region
+            #
+            # region_candidate_mean_weight:
+            #   0.0 = best candidate only
+            #   1.0 = mean candidate score only
+            best_candidate_score = min(finite_scores)
+            mean_candidate_score = sum(finite_scores) / float(len(finite_scores))
+
+            candidate_aggregate_score = (
+                (1.0 - self.region_candidate_mean_weight) * best_candidate_score
+                + self.region_candidate_mean_weight * mean_candidate_score
+            )
+
             score = (
-                self.region_distance_weight * region.min_path_length_m
+                self.region_distance_weight * candidate_aggregate_score
                 - self.region_gain_weight * float(region.total_unknown_gain_cells)
             )
 

@@ -57,7 +57,7 @@ frontier_detector:
     # Planning Optimisation
     plan_every_n_maps: 3
     min_plan_period_s: 0.75
-    publish_text_labels: false
+    publish_text_labels: true
 
     # Reachability filtering
     require_reachable: true
@@ -87,6 +87,12 @@ frontier_detector:
     # Lower score is better.
     region_distance_weight: 1.0
     region_gain_weight: 0.02
+
+    # Region candidate-score aggregation:
+    # 0.0 = region score uses only the best candidate in the region
+    # 1.0 = region score uses mean candidate score across the whole region
+    # 0.35 = mostly values best entry point, but also considers all candidates
+    region_candidate_mean_weight: 0.35
 
     # Selection mode
     # candidates_only:
