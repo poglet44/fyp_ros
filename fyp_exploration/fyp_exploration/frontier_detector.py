@@ -170,6 +170,7 @@ class FrontierDetector(Node):
         self.declare_parameter("region_candidate_mean_weight", 0.35)
         self.declare_parameter("region_candidate_count_weight", 0.0)
         self.declare_parameter("region_density_weight", 0.0)
+        self.declare_parameter("region_anchor_clearance_m", 0.20)
 
         # Goal hysteresis
         self.declare_parameter("enable_goal_hysteresis", True)
@@ -308,6 +309,9 @@ class FrontierDetector(Node):
         )
         self.region_density_weight = float(
             self.get_parameter("region_density_weight").value
+        )
+        self.region_anchor_clearance_m = float(
+            self.get_parameter("region_anchor_clearance_m").value
         )
 
         self.enable_goal_hysteresis = bool(self.get_parameter("enable_goal_hysteresis").value)
@@ -454,7 +458,8 @@ class FrontierDetector(Node):
             f"euclidean_merge_distance={self.frontier_region_merge_distance_m:.2f} m, "
             f"use_path_distance={self.use_path_distance_for_regions}, "
             f"path_merge_distance={self.frontier_region_merge_path_distance_m:.2f} m, "
-            f"candidate_mean_weight={self.region_candidate_mean_weight:.2f}"
+            f"candidate_mean_weight={self.region_candidate_mean_weight:.2f}, "
+            f"anchor_clearance={self.region_anchor_clearance_m:.2f} m"
         )
         self.get_logger().info(
             f"Candidate validity radius={self.candidate_validity_radius_m:.2f} m, "
@@ -534,6 +539,13 @@ class FrontierDetector(Node):
                 resolution=msg.info.resolution,
             )
 
+            region_anchor_safe_mask = self.build_clearance_safe_mask(
+                free_mask=free_mask,
+                occupied_mask=occupied_mask,
+                clearance_m=self.region_anchor_clearance_m,
+                resolution=msg.info.resolution,
+            )
+
             reachable_cells = None
             if self.require_reachable:
                 if robot_cell is None:
@@ -582,6 +594,7 @@ class FrontierDetector(Node):
                 msg=msg,
                 candidates=candidates,
                 path_safe_mask=path_safe_mask,
+                region_anchor_safe_mask=region_anchor_safe_mask,
                 robot_cell=robot_cell,
             )
 
@@ -2116,6 +2129,7 @@ class FrontierDetector(Node):
         msg: OccupancyGrid,
         candidates: List[FrontierCandidate],
         path_safe_mask: np.ndarray,
+        region_anchor_safe_mask: np.ndarray,
         robot_cell: Optional[Cell],
     ) -> List[FrontierRegion]:
         if not candidates:
@@ -2190,7 +2204,7 @@ class FrontierDetector(Node):
             # later be used as a navigable region-level target.
             anchor_cell = self.nearest_safe_cell_to_point(
                 msg=msg,
-                path_safe_mask=path_safe_mask,
+                path_safe_mask=region_anchor_safe_mask,
                 target_x=raw_centroid_x,
                 target_y=raw_centroid_y,
             )
@@ -2478,7 +2492,7 @@ class FrontierDetector(Node):
     def manage_active_goal(
         self,
         msg: OccupancyGrid,
-        robot_cell: Cell,
+        robot_cell: Optional[Cell],
         candidates: List[FrontierCandidate],
         newly_selected_candidate: Optional[FrontierCandidate],
     ) -> Optional[FrontierCandidate]:
@@ -2510,7 +2524,7 @@ class FrontierDetector(Node):
         if active_candidate is not None:
             self.active_goal_invalid_count = 0
 
-        if self.is_active_goal_reached(msg, robot_cell):
+        if robot_cell is not None and self.is_active_goal_reached(msg, robot_cell):
             self.get_logger().info("Active frontier goal reached. Replanning.")
             self.current_goal_reached = True
             self.clear_active_goal()
@@ -2627,9 +2641,12 @@ class FrontierDetector(Node):
     def is_active_goal_reached(
         self,
         msg: OccupancyGrid,
-        robot_cell: Cell,
+        robot_cell: Optional[Cell],
     ) -> bool:
         if self.active_goal_cell is None:
+            return False
+
+        if robot_cell is None:
             return False
 
         distance_m = self.cell_distance_m(

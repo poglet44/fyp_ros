@@ -181,6 +181,24 @@ frontier_detector:
     publish_text_labels: true
     publish_debug_every_n_maps: 10
 
+    # Region anchor clearance
+    #
+    # Controls clearance for the region anchor point only.
+    #
+    # The true region centroid is just a geometric/debug point and may be unsafe.
+    # The anchor is the nearest free/safe cell to that centroid.
+    #
+    # This does NOT change:
+    #   - candidate goal clearance
+    #   - A* path clearance
+    #   - frontier filtering
+    #
+    # Related parameters:
+    #   min_obstacle_clearance_m  = candidate goal clearance
+    #   path_obstacle_clearance_m = A* path clearance
+    #   region_anchor_clearance_m = region anchor clearance
+    region_anchor_clearance_m: 0.20
+
 
     # =========================================================================
     # 11. Selection Mode: Candidate-only vs Region-first
