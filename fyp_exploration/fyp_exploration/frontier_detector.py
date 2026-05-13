@@ -51,6 +51,13 @@ class FrontierRegion:
     score: float = float("inf")
 
 
+@dataclass
+class BlacklistedGoal:
+    goal_cell: Cell
+    expires_at_s: float
+    reason: str
+
+
 class FrontierDetector(Node):
     def __init__(self):
         super().__init__("frontier_detector")
@@ -108,6 +115,21 @@ class FrontierDetector(Node):
         self.declare_parameter("selection_policy", "nearest")
         self.declare_parameter("utility_distance_weight", 1.0)
         self.declare_parameter("utility_gain_weight", 0.02)
+
+        def declare_parameter_if_not_declared(name, default_value):
+            if not self.has_parameter(name):
+                self.declare_parameter(name, default_value)
+
+        self.declare_parameter_if_not_declared = declare_parameter_if_not_declared
+
+        # Goal manager / planning state
+        self.declare_parameter_if_not_declared("goal_reached_distance_m", 0.35)
+        self.declare_parameter_if_not_declared("goal_timeout_s", 30.0)
+        self.declare_parameter_if_not_declared("goal_blacklist_radius_m", 0.50)
+        self.declare_parameter_if_not_declared("goal_blacklist_duration_s", 20.0)
+        self.declare_parameter_if_not_declared("minimum_goal_switch_improvement", 1.50)
+        self.declare_parameter_if_not_declared("enable_goal_timeout", True)
+        self.declare_parameter_if_not_declared("enable_goal_blacklist", True)
 
         # Hierarchical frontier region selection
         self.declare_parameter("use_region_hierarchy", True)
@@ -192,6 +214,22 @@ class FrontierDetector(Node):
         self.utility_distance_weight = float(self.get_parameter("utility_distance_weight").value)
         self.utility_gain_weight = float(self.get_parameter("utility_gain_weight").value)
 
+        self.goal_reached_distance_m = float(
+            self.get_parameter("goal_reached_distance_m").value
+        )
+        self.goal_timeout_s = float(self.get_parameter("goal_timeout_s").value)
+        self.goal_blacklist_radius_m = float(
+            self.get_parameter("goal_blacklist_radius_m").value
+        )
+        self.goal_blacklist_duration_s = float(
+            self.get_parameter("goal_blacklist_duration_s").value
+        )
+        self.minimum_goal_switch_improvement = float(
+            self.get_parameter("minimum_goal_switch_improvement").value
+        )
+        self.enable_goal_timeout = bool(self.get_parameter("enable_goal_timeout").value)
+        self.enable_goal_blacklist = bool(self.get_parameter("enable_goal_blacklist").value)
+
         self.use_region_hierarchy = bool(self.get_parameter("use_region_hierarchy").value)
         self.selection_mode = self.resolve_selection_mode(
             str(self.get_parameter("selection_mode").value)
@@ -258,6 +296,15 @@ class FrontierDetector(Node):
         self.cached_selected_region_id: Optional[int] = None
         self.previous_active_region_centroid_cell: Optional[Cell] = None
         self.previous_active_region_score: float = float("inf")
+
+        # Active exploration-goal state.
+        # The planner publishes/keeps this goal until it is reached, invalid,
+        # timed out, or beaten by a significantly better goal.
+        self.active_goal_cell: Optional[Cell] = None
+        self.active_goal_started_at_s: Optional[float] = None
+        self.active_goal_region_id: Optional[int] = None
+        self.active_goal_score: float = float("inf")
+        self.blacklisted_goals: List[BlacklistedGoal] = []
         self.has_planned_once = False
         self.last_plan_time_ns = 0
         self.last_replan_reason = "none"
@@ -308,6 +355,14 @@ class FrontierDetector(Node):
         self.get_logger().info(f"Path planning enabled: {self.enable_path_planning}")
         self.get_logger().info(f"Goal hysteresis enabled: {self.enable_goal_hysteresis}")
         self.get_logger().info(f"Selection mode: {self.selection_mode}")
+        self.get_logger().info(
+            "Goal manager: "
+            f"reached_distance={self.goal_reached_distance_m:.2f} m, "
+            f"timeout={self.goal_timeout_s:.1f} s, "
+            f"blacklist_radius={self.goal_blacklist_radius_m:.2f} m, "
+            f"blacklist_duration={self.goal_blacklist_duration_s:.1f} s, "
+            f"min_switch_improvement={self.minimum_goal_switch_improvement:.2f}"
+        )
         self.get_logger().info(
             f"Planning throttle: plan_every_n_maps={self.plan_every_n_maps}, "
             f"min_plan_period_s={self.min_plan_period_s:.2f}"
@@ -438,6 +493,11 @@ class FrontierDetector(Node):
                 reachable_cells=reachable_cells,
             )
 
+            candidates = self.filter_blacklisted_candidates(
+                msg=msg,
+                candidates=candidates,
+            )
+
             frontier_regions = self.build_frontier_regions(
                 msg=msg,
                 candidates=candidates,
@@ -451,17 +511,22 @@ class FrontierDetector(Node):
                 )
             elif self.selection_mode == "candidates_only":
                 selected_candidate = self.select_candidate(candidates)
-                self.cached_selected_region_id = (
-                    selected_candidate.region_id if selected_candidate is not None else None
-                )
             else:
                 self.get_logger().warn(
                     f'Unexpected selection_mode="{self.selection_mode}". Falling back to candidates_only.'
                 )
                 selected_candidate = self.select_candidate(candidates)
-                self.cached_selected_region_id = (
-                    selected_candidate.region_id if selected_candidate is not None else None
-                )
+
+            selected_candidate = self.manage_active_goal(
+                msg=msg,
+                robot_cell=robot_cell,
+                candidates=candidates,
+                newly_selected_candidate=selected_candidate,
+            )
+
+            self.cached_selected_region_id = (
+                selected_candidate.region_id if selected_candidate is not None else None
+            )
 
             self.cached_candidates = candidates
             self.cached_frontier_regions = frontier_regions
@@ -2003,6 +2068,248 @@ class FrontierDetector(Node):
             return candidates[candidate_indices[0]].goal_cell
 
         return best_cell
+
+    # -------------------------------------------------------------------------
+    # Goal manager / planning state
+    # -------------------------------------------------------------------------
+
+    def now_seconds(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def filter_blacklisted_candidates(
+        self,
+        msg: OccupancyGrid,
+        candidates: List[FrontierCandidate],
+    ) -> List[FrontierCandidate]:
+        self.prune_expired_blacklisted_goals()
+
+        if not self.enable_goal_blacklist or not self.blacklisted_goals:
+            return candidates
+
+        filtered: List[FrontierCandidate] = []
+
+        for candidate in candidates:
+            if self.is_goal_blacklisted(msg, candidate.goal_cell):
+                continue
+            filtered.append(candidate)
+
+        if candidates and not filtered:
+            self.get_logger().warn(
+                "All current frontier candidates are blacklisted. "
+                "Clearing blacklist to avoid planner deadlock."
+            )
+            self.blacklisted_goals.clear()
+            return candidates
+
+        return filtered
+
+    def manage_active_goal(
+        self,
+        msg: OccupancyGrid,
+        robot_cell: Cell,
+        candidates: List[FrontierCandidate],
+        newly_selected_candidate: Optional[FrontierCandidate],
+    ) -> Optional[FrontierCandidate]:
+        now_s = self.now_seconds()
+        self.prune_expired_blacklisted_goals()
+
+        if self.active_goal_cell is None:
+            self.set_active_goal(newly_selected_candidate, now_s)
+            return newly_selected_candidate
+
+        active_candidate = self.find_matching_current_candidate(
+            msg=msg,
+            candidates=candidates,
+            goal_cell=self.active_goal_cell,
+        )
+
+        if self.is_active_goal_reached(msg, robot_cell):
+            self.get_logger().info("Active frontier goal reached. Replanning.")
+            self.clear_active_goal()
+
+            self.set_active_goal(newly_selected_candidate, now_s)
+            return newly_selected_candidate
+
+        if active_candidate is None:
+            self.get_logger().info("Active frontier goal is no longer valid. Replanning.")
+            self.blacklist_active_goal(now_s, reason="invalid")
+            self.clear_active_goal()
+
+            self.set_active_goal(newly_selected_candidate, now_s)
+            return newly_selected_candidate
+
+        if self.active_goal_timed_out(now_s):
+            self.get_logger().warn("Active frontier goal timed out. Blacklisting and replanning.")
+            self.blacklist_active_goal(now_s, reason="timeout")
+            self.clear_active_goal()
+
+            self.set_active_goal(newly_selected_candidate, now_s)
+            return newly_selected_candidate
+
+        if newly_selected_candidate is None:
+            return active_candidate
+
+        if self.should_switch_active_goal(
+            current_active_candidate=active_candidate,
+            newly_selected_candidate=newly_selected_candidate,
+        ):
+            self.get_logger().info(
+                "Switching active frontier goal because the new candidate is "
+                "significantly better."
+            )
+            self.set_active_goal(newly_selected_candidate, now_s)
+            return newly_selected_candidate
+
+        # Keep committed goal, but use the current regenerated candidate so the
+        # pose/path remain consistent with the latest map.
+        self.active_goal_score = active_candidate.score
+        self.active_goal_region_id = active_candidate.region_id
+        return active_candidate
+
+    def set_active_goal(
+        self,
+        candidate: Optional[FrontierCandidate],
+        now_s: float,
+    ) -> None:
+        if candidate is None:
+            self.clear_active_goal()
+            return
+
+        if self.active_goal_cell != candidate.goal_cell:
+            self.active_goal_started_at_s = now_s
+
+        self.active_goal_cell = candidate.goal_cell
+        self.active_goal_region_id = candidate.region_id
+        self.active_goal_score = candidate.score
+
+    def clear_active_goal(self) -> None:
+        self.active_goal_cell = None
+        self.active_goal_started_at_s = None
+        self.active_goal_region_id = None
+        self.active_goal_score = float("inf")
+
+    def is_active_goal_reached(
+        self,
+        msg: OccupancyGrid,
+        robot_cell: Cell,
+    ) -> bool:
+        if self.active_goal_cell is None:
+            return False
+
+        distance_m = self.cell_distance_m(
+            msg,
+            robot_cell,
+            self.active_goal_cell,
+        )
+
+        return distance_m <= self.goal_reached_distance_m
+
+    def active_goal_timed_out(self, now_s: float) -> bool:
+        if not self.enable_goal_timeout:
+            return False
+
+        if self.active_goal_started_at_s is None:
+            return False
+
+        return (now_s - self.active_goal_started_at_s) >= self.goal_timeout_s
+
+    def should_switch_active_goal(
+        self,
+        current_active_candidate: FrontierCandidate,
+        newly_selected_candidate: FrontierCandidate,
+    ) -> bool:
+        if newly_selected_candidate.goal_cell == current_active_candidate.goal_cell:
+            return False
+
+        # Scores are lower-is-better in the current selector.
+        required_score = (
+            current_active_candidate.score - self.minimum_goal_switch_improvement
+        )
+
+        return newly_selected_candidate.score < required_score
+
+    def find_matching_current_candidate(
+        self,
+        msg: OccupancyGrid,
+        candidates: List[FrontierCandidate],
+        goal_cell: Cell,
+    ) -> Optional[FrontierCandidate]:
+        if not candidates:
+            return None
+
+        best_candidate: Optional[FrontierCandidate] = None
+        best_distance_m = float("inf")
+
+        for candidate in candidates:
+            distance_m = self.cell_distance_m(
+                msg,
+                candidate.goal_cell,
+                goal_cell,
+            )
+
+            if distance_m < best_distance_m:
+                best_distance_m = distance_m
+                best_candidate = candidate
+
+        if best_candidate is None:
+            return None
+
+        # Allow the active goal to move slightly as the frontier/candidate is
+        # regenerated from the latest map, but do not silently jump to another
+        # unrelated frontier.
+        if best_distance_m <= self.goal_blacklist_radius_m:
+            return best_candidate
+
+        return None
+
+    def blacklist_active_goal(
+        self,
+        now_s: float,
+        reason: str,
+    ) -> None:
+        if not self.enable_goal_blacklist:
+            return
+
+        if self.active_goal_cell is None:
+            return
+
+        self.blacklisted_goals.append(
+            BlacklistedGoal(
+                goal_cell=self.active_goal_cell,
+                expires_at_s=now_s + self.goal_blacklist_duration_s,
+                reason=reason,
+            )
+        )
+
+    def prune_expired_blacklisted_goals(self) -> None:
+        if not self.blacklisted_goals:
+            return
+
+        now_s = self.now_seconds()
+        self.blacklisted_goals = [
+            goal for goal in self.blacklisted_goals
+            if goal.expires_at_s > now_s
+        ]
+
+    def is_goal_blacklisted(
+        self,
+        msg: OccupancyGrid,
+        goal_cell: Cell,
+    ) -> bool:
+        if not self.enable_goal_blacklist:
+            return False
+
+        for blacklisted_goal in self.blacklisted_goals:
+            distance_m = self.cell_distance_m(
+                msg,
+                goal_cell,
+                blacklisted_goal.goal_cell,
+            )
+
+            if distance_m <= self.goal_blacklist_radius_m:
+                return True
+
+        return False
 
     def select_candidate_hierarchical(
         self,

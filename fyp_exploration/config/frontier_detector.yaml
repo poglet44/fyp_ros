@@ -124,6 +124,16 @@ frontier_detector:
     hysteresis_goal_match_distance_m: 0.75
     hysteresis_switch_margin: 0.75
 
+
+    # Planner / goal manager
+    goal_reached_distance_m: 0.35
+    goal_timeout_s: 30.0
+    goal_blacklist_radius_m: 0.50
+    goal_blacklist_duration_s: 20.0
+    minimum_goal_switch_improvement: 1.50
+    enable_goal_timeout: true
+    enable_goal_blacklist: true
+
     # RViz marker settings
     marker_scale_m: 0.08
     publish_debug_every_n_maps: 10
