@@ -521,6 +521,18 @@ class FrontierDetector(Node):
                 path_safe_mask=path_safe_mask,
             )
 
+            # Compute scores before selection so both candidate and region
+            # debug labels are meaningful in every selection mode.
+            #
+            # Without this, regions can show score=inf when selection_mode is
+            # candidates_only, because region scoring is otherwise only called
+            # inside select_candidate_hierarchical().
+            self.compute_candidate_scores(candidates)
+            self.compute_region_scores(
+                regions=frontier_regions,
+                candidates=candidates,
+            )
+
             if self.selection_mode == "regions_then_candidates":
                 selected_candidate = self.select_candidate_hierarchical(
                     candidates=candidates,
@@ -2446,12 +2458,6 @@ class FrontierDetector(Node):
             self.cached_selected_region_id = None
             return None
 
-        self.compute_candidate_scores(candidates)
-        self.compute_region_scores(
-            regions=regions,
-            candidates=candidates,
-        )
-
         best_region = min(regions, key=lambda region: region.score)
         previous_region = self.find_previous_active_region(regions)
 
@@ -2950,6 +2956,41 @@ class FrontierDetector(Node):
             marker_array.markers.append(lines)
 
             if self.publish_text_labels:
+                region_candidates = [
+                    candidates[candidate_index]
+                    for candidate_index in region.candidate_indices
+                    if 0 <= candidate_index < len(candidates)
+                ]
+
+                finite_candidate_scores = [
+                    candidate.score
+                    for candidate in region_candidates
+                    if math.isfinite(candidate.score)
+                ]
+
+                if finite_candidate_scores:
+                    best_candidate_score_text = f"{min(finite_candidate_scores):.2f}"
+                    mean_candidate_score_text = (
+                        f"{sum(finite_candidate_scores) / float(len(finite_candidate_scores)):.2f}"
+                    )
+                else:
+                    best_candidate_score_text = "inf"
+                    mean_candidate_score_text = "inf"
+
+                min_path_text = (
+                    f"{region.min_path_length_m:.1f}m"
+                    if math.isfinite(region.min_path_length_m)
+                    else "inf"
+                )
+
+                region_score_text = (
+                    f"{region.score:.2f}"
+                    if math.isfinite(region.score)
+                    else "inf"
+                )
+
+                selected_prefix = "*" if is_selected_region else ""
+
                 text = Marker()
                 text.header = msg.header
                 text.ns = "frontier_region_labels"
@@ -2958,19 +2999,19 @@ class FrontierDetector(Node):
                 text.action = Marker.ADD
                 text.pose.position.x = centroid_x
                 text.pose.position.y = centroid_y
-                text.pose.position.z = 0.75
+                text.pose.position.z = 0.95
                 text.pose.orientation.w = 1.0
-                text.scale.z = 0.25
+                text.scale.z = 0.32
                 text.color.r = 1.0
                 text.color.g = 1.0
                 text.color.b = 1.0
                 text.color.a = 1.0
                 text.text = (
-                    f"R{region.region_id}\n"
-                    f"goals={len(region.candidate_indices)}\n"
-                    f"gain={region.total_unknown_gain_cells}\n"
-                    f"d={region.min_path_length_m:.1f}m\n"
-                    f"s={region.score:.2f}"
+                    f"{selected_prefix}R{region.region_id}\n"
+                    f"goals={len(region.candidate_indices)} gain={region.total_unknown_gain_cells}\n"
+                    f"min_d={min_path_text}\n"
+                    f"best={best_candidate_score_text} mean={mean_candidate_score_text}\n"
+                    f"score={region_score_text}"
                 )
                 marker_array.markers.append(text)
 
@@ -3035,25 +3076,72 @@ class FrontierDetector(Node):
             marker_array.markers.append(sphere)
 
             if self.publish_text_labels:
+                is_selected_candidate = (
+                    selected_candidate is not None
+                    and candidate.goal_cell == selected_candidate.goal_cell
+                )
+
+                path_text = (
+                    f"{candidate.path_length_m:.1f}"
+                    if math.isfinite(candidate.path_length_m)
+                    else "inf"
+                )
+
+                score_text = (
+                    f"{candidate.score:.2f}"
+                    if math.isfinite(candidate.score)
+                    else "inf"
+                )
+
+                selected_prefix = "*" if is_selected_candidate else ""
+
+                # Offset candidate labels around the marker so they do not sit
+                # directly on top of frontier cells, path lines, or each other.
+                # This is visual-only and does not change candidate geometry.
+                label_angle = (float(i % 8) / 8.0) * 2.0 * math.pi
+                label_radius_m = 0.45 if not is_selected_candidate else 0.60
+                label_dx = label_radius_m * math.cos(label_angle)
+                label_dy = label_radius_m * math.sin(label_angle)
+
                 text = Marker()
                 text.header = msg.header
                 text.ns = "frontier_goal_labels"
                 text.id = 2000 + i
                 text.type = Marker.TEXT_VIEW_FACING
                 text.action = Marker.ADD
-                text.pose = candidate.goal_pose
-                text.pose.position.z = 0.5
-                text.scale.z = 0.22
-                text.color.r = 1.0
-                text.color.g = 1.0
-                text.color.b = 1.0
-                text.color.a = 1.0
-                text.text = (
-                    f"R{candidate.region_id} F{candidate.cluster_id}\\n"
-                    f"{candidate.path_length_m:.1f}m\\n"
-                    f"g={candidate.unknown_gain_cells}\\n"
-                    f"s={candidate.score:.2f}"
-                )
+
+                # Do NOT assign candidate.goal_pose directly here.
+                # ROS Python message assignment is reference-like for nested
+                # fields, so modifying text.pose.position would also move the
+                # actual candidate goal pose.
+                text.pose.position.x = candidate.goal_pose.position.x + label_dx
+                text.pose.position.y = candidate.goal_pose.position.y + label_dy
+                text.pose.position.z = 0.85 if is_selected_candidate else 0.65
+                text.pose.orientation.w = 1.0
+
+                text.scale.z = 0.30 if is_selected_candidate else 0.22
+
+                if is_selected_candidate:
+                    text.color.r = 1.0
+                    text.color.g = 0.0
+                    text.color.b = 1.0
+                    text.color.a = 1.0
+                    text.text = (
+                        f"{selected_prefix}C{i} R{candidate.region_id}\n"
+                        f"d={path_text} s={score_text}\n"
+                        f"g={candidate.unknown_gain_cells}"
+                    )
+                else:
+                    text.color.r = 0.85
+                    text.color.g = 1.0
+                    text.color.b = 1.0
+                    text.color.a = 0.95
+                    text.text = (
+                        f"C{i} R{candidate.region_id}\n"
+                        f"d={path_text} s={score_text}\n"
+                        f"g={candidate.unknown_gain_cells}"
+                    )
+
                 marker_array.markers.append(text)
 
         if selected_candidate is not None:
