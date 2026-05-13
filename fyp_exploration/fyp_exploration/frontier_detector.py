@@ -111,6 +111,7 @@ class FrontierDetector(Node):
 
         # Hierarchical frontier region selection
         self.declare_parameter("use_region_hierarchy", True)
+        self.declare_parameter("selection_mode", "auto")
         self.declare_parameter("frontier_regions_markers_topic", "/frontier_regions_markers")
         self.declare_parameter("frontier_region_merge_distance_m", 1.50)
         self.declare_parameter("use_path_distance_for_regions", True)
@@ -192,6 +193,11 @@ class FrontierDetector(Node):
         self.utility_gain_weight = float(self.get_parameter("utility_gain_weight").value)
 
         self.use_region_hierarchy = bool(self.get_parameter("use_region_hierarchy").value)
+        self.selection_mode = self.resolve_selection_mode(
+            str(self.get_parameter("selection_mode").value)
+        )
+        self.use_region_hierarchy = self.selection_mode == "regions_then_candidates"
+
         self.frontier_region_merge_distance_m = float(
             self.get_parameter("frontier_region_merge_distance_m").value
         )
@@ -301,6 +307,7 @@ class FrontierDetector(Node):
         self.get_logger().info(f"Require reachable: {self.require_reachable}")
         self.get_logger().info(f"Path planning enabled: {self.enable_path_planning}")
         self.get_logger().info(f"Goal hysteresis enabled: {self.enable_goal_hysteresis}")
+        self.get_logger().info(f"Selection mode: {self.selection_mode}")
         self.get_logger().info(
             f"Planning throttle: plan_every_n_maps={self.plan_every_n_maps}, "
             f"min_plan_period_s={self.min_plan_period_s:.2f}"
@@ -437,12 +444,20 @@ class FrontierDetector(Node):
                 path_safe_mask=path_safe_mask,
             )
 
-            if self.use_region_hierarchy:
+            if self.selection_mode == "regions_then_candidates":
                 selected_candidate = self.select_candidate_hierarchical(
                     candidates=candidates,
                     regions=frontier_regions,
                 )
+            elif self.selection_mode == "candidates_only":
+                selected_candidate = self.select_candidate(candidates)
+                self.cached_selected_region_id = (
+                    selected_candidate.region_id if selected_candidate is not None else None
+                )
             else:
+                self.get_logger().warn(
+                    f'Unexpected selection_mode="{self.selection_mode}". Falling back to candidates_only.'
+                )
                 selected_candidate = self.select_candidate(candidates)
                 self.cached_selected_region_id = (
                     selected_candidate.region_id if selected_candidate is not None else None
@@ -548,6 +563,22 @@ class FrontierDetector(Node):
             time_gate_open = elapsed_s >= self.min_plan_period_s
 
         return map_gate_open and time_gate_open
+
+    def resolve_selection_mode(self, requested_mode: str) -> str:
+        mode = requested_mode.strip().lower()
+
+        if mode == "auto":
+            return "regions_then_candidates" if self.use_region_hierarchy else "candidates_only"
+
+        if mode in ("candidates_only", "regions_then_candidates"):
+            return mode
+
+        self.get_logger().warn(
+            f'Unknown selection_mode="{requested_mode}". '
+            'Valid options are "auto", "candidates_only", and "regions_then_candidates". '
+            'Falling back to "candidates_only".'
+        )
+        return "candidates_only"
 
     # -------------------------------------------------------------------------
     # CSV logging

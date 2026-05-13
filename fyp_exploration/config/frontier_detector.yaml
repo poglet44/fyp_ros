@@ -88,8 +88,13 @@ frontier_detector:
     region_distance_weight: 1.0
     region_gain_weight: 0.02
 
-
-
+    # Selection mode
+    # candidates_only:
+    #   Select candidate goals directly
+    # regions_then_candidates:
+    #   Select frontier region, then choose candidates within the selected region
+    #
+    #
     # Selection policy
     #
     # nearest:
@@ -101,6 +106,7 @@ frontier_detector:
     #             - utility_gain_weight * unknown_gain_cells
     #
     #   Lower score is better.
+    selection_mode: candidates_only
     selection_policy: nearest
     utility_distance_weight: 1.0
     utility_gain_weight: 0.02
