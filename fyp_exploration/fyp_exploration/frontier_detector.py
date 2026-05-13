@@ -305,6 +305,14 @@ class FrontierDetector(Node):
         self.active_goal_region_id: Optional[int] = None
         self.active_goal_score: float = float("inf")
         self.blacklisted_goals: List[BlacklistedGoal] = []
+
+        # Per-cycle planner diagnostics for CSV logging.
+        self.current_planner_status = "uninitialised"
+        self.current_goal_reached = False
+        self.current_goal_invalid = False
+        self.current_goal_timed_out = False
+        self.current_goal_switched = False
+
         self.has_planned_once = False
         self.last_plan_time_ns = 0
         self.last_replan_reason = "none"
@@ -717,6 +725,23 @@ class FrontierDetector(Node):
                 "selected_goal_age_maps",
                 "distance_to_selected_goal_m",
                 "selection_policy",
+                "selection_mode",
+                "planner_status",
+                "active_goal_cell_x",
+                "active_goal_cell_y",
+                "active_goal_x",
+                "active_goal_y",
+                "active_goal_age_s",
+                "active_goal_region_id",
+                "active_goal_score",
+                "blacklist_count",
+                "selected_candidate_region_id",
+                "selected_candidate_score",
+                "selected_candidate_path_length_m",
+                "goal_reached",
+                "goal_invalid",
+                "goal_timed_out",
+                "goal_switched",
                 "robot_delta_distance_m",
                 "total_robot_distance_m",
                 "robot_delta_yaw_rad",
@@ -748,6 +773,7 @@ class FrontierDetector(Node):
                 "map_count",
                 "candidate_index",
                 "cluster_id",
+                "region_id",
                 "is_selected",
                 "goal_cell_x",
                 "goal_cell_y",
@@ -935,6 +961,24 @@ class FrontierDetector(Node):
                 dy = selected.goal_pose.position.y - robot_y
                 distance_to_selected_goal_m = math.hypot(dx, dy)
 
+        active_goal_cell_x = ""
+        active_goal_cell_y = ""
+        active_goal_x = ""
+        active_goal_y = ""
+        active_goal_age_s = ""
+
+        if self.active_goal_cell is not None:
+            active_goal_cell_x = self.active_goal_cell[0]
+            active_goal_cell_y = self.active_goal_cell[1]
+            active_goal_x, active_goal_y = self.cell_to_world(
+                msg,
+                self.active_goal_cell[0],
+                self.active_goal_cell[1],
+            )
+
+            if self.active_goal_started_at_s is not None:
+                active_goal_age_s = self.now_seconds() - self.active_goal_started_at_s
+
         self.map_metrics_writer.writerow(
             {
                 "run_id": self.run_id,
@@ -979,6 +1023,37 @@ class FrontierDetector(Node):
                 "selected_goal_age_maps": selected_goal_age_maps,
                 "distance_to_selected_goal_m": distance_to_selected_goal_m,
                 "selection_policy": self.selection_policy,
+                "selection_mode": self.selection_mode,
+                "planner_status": self.current_planner_status,
+                "active_goal_cell_x": active_goal_cell_x,
+                "active_goal_cell_y": active_goal_cell_y,
+                "active_goal_x": active_goal_x,
+                "active_goal_y": active_goal_y,
+                "active_goal_age_s": active_goal_age_s,
+                "active_goal_region_id": (
+                    self.active_goal_region_id
+                    if self.active_goal_region_id is not None
+                    else ""
+                ),
+                "active_goal_score": (
+                    self.active_goal_score
+                    if math.isfinite(self.active_goal_score)
+                    else ""
+                ),
+                "blacklist_count": len(self.blacklisted_goals),
+                "selected_candidate_region_id": (
+                    selected.region_id if selected is not None else ""
+                ),
+                "selected_candidate_score": (
+                    selected.score if selected is not None else ""
+                ),
+                "selected_candidate_path_length_m": (
+                    selected.path_length_m if selected is not None else ""
+                ),
+                "goal_reached": int(self.current_goal_reached),
+                "goal_invalid": int(self.current_goal_invalid),
+                "goal_timed_out": int(self.current_goal_timed_out),
+                "goal_switched": int(self.current_goal_switched),
                 "robot_delta_distance_m": robot_delta_distance_m,
                 "total_robot_distance_m": self.total_robot_distance_m,
                 "robot_delta_yaw_rad": robot_delta_yaw_rad,
@@ -1107,6 +1182,7 @@ class FrontierDetector(Node):
                     "map_count": self.map_count,
                     "candidate_index": i,
                     "cluster_id": candidate.cluster_id,
+                    "region_id": candidate.region_id,
                     "is_selected": int(candidate.goal_cell == selected_cell),
                     "goal_cell_x": candidate.goal_cell[0],
                     "goal_cell_y": candidate.goal_cell[1],
@@ -2113,8 +2189,20 @@ class FrontierDetector(Node):
         now_s = self.now_seconds()
         self.prune_expired_blacklisted_goals()
 
+        self.current_planner_status = "evaluating"
+        self.current_goal_reached = False
+        self.current_goal_invalid = False
+        self.current_goal_timed_out = False
+        self.current_goal_switched = False
+
         if self.active_goal_cell is None:
             self.set_active_goal(newly_selected_candidate, now_s)
+
+            if newly_selected_candidate is None:
+                self.current_planner_status = "no_goal_available"
+            else:
+                self.current_planner_status = "new_goal_committed"
+
             return newly_selected_candidate
 
         active_candidate = self.find_matching_current_candidate(
@@ -2125,28 +2213,50 @@ class FrontierDetector(Node):
 
         if self.is_active_goal_reached(msg, robot_cell):
             self.get_logger().info("Active frontier goal reached. Replanning.")
+            self.current_goal_reached = True
             self.clear_active_goal()
 
             self.set_active_goal(newly_selected_candidate, now_s)
+
+            if newly_selected_candidate is None:
+                self.current_planner_status = "goal_reached_no_replacement"
+            else:
+                self.current_planner_status = "goal_reached_replaced"
+
             return newly_selected_candidate
 
         if active_candidate is None:
             self.get_logger().info("Active frontier goal is no longer valid. Replanning.")
+            self.current_goal_invalid = True
             self.blacklist_active_goal(now_s, reason="invalid")
             self.clear_active_goal()
 
             self.set_active_goal(newly_selected_candidate, now_s)
+
+            if newly_selected_candidate is None:
+                self.current_planner_status = "goal_invalid_no_replacement"
+            else:
+                self.current_planner_status = "goal_invalid_replaced"
+
             return newly_selected_candidate
 
         if self.active_goal_timed_out(now_s):
             self.get_logger().warn("Active frontier goal timed out. Blacklisting and replanning.")
+            self.current_goal_timed_out = True
             self.blacklist_active_goal(now_s, reason="timeout")
             self.clear_active_goal()
 
             self.set_active_goal(newly_selected_candidate, now_s)
+
+            if newly_selected_candidate is None:
+                self.current_planner_status = "goal_timeout_no_replacement"
+            else:
+                self.current_planner_status = "goal_timeout_replaced"
+
             return newly_selected_candidate
 
         if newly_selected_candidate is None:
+            self.current_planner_status = "active_goal_kept_no_new_candidate"
             return active_candidate
 
         if self.should_switch_active_goal(
@@ -2157,13 +2267,16 @@ class FrontierDetector(Node):
                 "Switching active frontier goal because the new candidate is "
                 "significantly better."
             )
+            self.current_goal_switched = True
             self.set_active_goal(newly_selected_candidate, now_s)
+            self.current_planner_status = "goal_switched_better_candidate"
             return newly_selected_candidate
 
         # Keep committed goal, but use the current regenerated candidate so the
         # pose/path remain consistent with the latest map.
         self.active_goal_score = active_candidate.score
         self.active_goal_region_id = active_candidate.region_id
+        self.current_planner_status = "active_goal_kept"
         return active_candidate
 
     def set_active_goal(
