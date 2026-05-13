@@ -130,6 +130,8 @@ class FrontierDetector(Node):
         self.declare_parameter_if_not_declared("minimum_goal_switch_improvement", 1.50)
         self.declare_parameter_if_not_declared("enable_goal_timeout", True)
         self.declare_parameter_if_not_declared("enable_goal_blacklist", True)
+        self.declare_parameter_if_not_declared("active_goal_match_radius_m", 1.00)
+        self.declare_parameter_if_not_declared("active_goal_invalid_grace_cycles", 3)
 
         # Hierarchical frontier region selection
         self.declare_parameter("use_region_hierarchy", True)
@@ -230,6 +232,16 @@ class FrontierDetector(Node):
         )
         self.enable_goal_timeout = bool(self.get_parameter("enable_goal_timeout").value)
         self.enable_goal_blacklist = bool(self.get_parameter("enable_goal_blacklist").value)
+        self.active_goal_match_radius_m = float(
+            self.get_parameter("active_goal_match_radius_m").value
+        )
+        self.active_goal_invalid_grace_cycles = int(
+            self.get_parameter("active_goal_invalid_grace_cycles").value
+        )
+        self.active_goal_invalid_grace_cycles = max(
+            1,
+            self.active_goal_invalid_grace_cycles,
+        )
 
         self.use_region_hierarchy = bool(self.get_parameter("use_region_hierarchy").value)
         self.selection_mode = self.resolve_selection_mode(
@@ -312,6 +324,8 @@ class FrontierDetector(Node):
         self.active_goal_started_at_s: Optional[float] = None
         self.active_goal_region_id: Optional[int] = None
         self.active_goal_score: float = float("inf")
+        self.active_goal_candidate: Optional[FrontierCandidate] = None
+        self.active_goal_invalid_count = 0
         self.blacklisted_goals: List[BlacklistedGoal] = []
 
         # Per-cycle planner diagnostics for CSV logging.
@@ -377,7 +391,9 @@ class FrontierDetector(Node):
             f"timeout={self.goal_timeout_s:.1f} s, "
             f"blacklist_radius={self.goal_blacklist_radius_m:.2f} m, "
             f"blacklist_duration={self.goal_blacklist_duration_s:.1f} s, "
-            f"min_switch_improvement={self.minimum_goal_switch_improvement:.2f}"
+            f"min_switch_improvement={self.minimum_goal_switch_improvement:.2f}, "
+            f"match_radius={self.active_goal_match_radius_m:.2f} m, "
+            f"invalid_grace_cycles={self.active_goal_invalid_grace_cycles}"
         )
         self.get_logger().info(
             f"Planning throttle: plan_every_n_maps={self.plan_every_n_maps}, "
@@ -2232,6 +2248,9 @@ class FrontierDetector(Node):
             goal_cell=self.active_goal_cell,
         )
 
+        if active_candidate is not None:
+            self.active_goal_invalid_count = 0
+
         if self.is_active_goal_reached(msg, robot_cell):
             self.get_logger().info("Active frontier goal reached. Replanning.")
             self.current_goal_reached = True
@@ -2247,7 +2266,26 @@ class FrontierDetector(Node):
             return newly_selected_candidate
 
         if active_candidate is None:
-            self.get_logger().info("Active frontier goal is no longer valid. Replanning.")
+            self.active_goal_invalid_count += 1
+
+            if self.active_goal_invalid_count < self.active_goal_invalid_grace_cycles:
+                self.current_planner_status = (
+                    f"active_goal_temporarily_missing_"
+                    f"{self.active_goal_invalid_count}/"
+                    f"{self.active_goal_invalid_grace_cycles}"
+                )
+
+                # Keep publishing the previously committed goal for a few
+                # planning cycles. This prevents map/frontier flicker from
+                # causing unstable goal switching while the robot is stationary.
+                if self.active_goal_candidate is not None:
+                    return self.active_goal_candidate
+
+                return newly_selected_candidate
+
+            self.get_logger().info(
+                "Active frontier goal is no longer valid after grace period. Replanning."
+            )
             self.current_goal_invalid = True
             self.blacklist_active_goal(now_s, reason="invalid")
             self.clear_active_goal()
@@ -2297,6 +2335,7 @@ class FrontierDetector(Node):
         # pose/path remain consistent with the latest map.
         self.active_goal_score = active_candidate.score
         self.active_goal_region_id = active_candidate.region_id
+        self.active_goal_candidate = active_candidate
         self.current_planner_status = "active_goal_kept"
         return active_candidate
 
@@ -2315,12 +2354,16 @@ class FrontierDetector(Node):
         self.active_goal_cell = candidate.goal_cell
         self.active_goal_region_id = candidate.region_id
         self.active_goal_score = candidate.score
+        self.active_goal_candidate = candidate
+        self.active_goal_invalid_count = 0
 
     def clear_active_goal(self) -> None:
         self.active_goal_cell = None
         self.active_goal_started_at_s = None
         self.active_goal_region_id = None
         self.active_goal_score = float("inf")
+        self.active_goal_candidate = None
+        self.active_goal_invalid_count = 0
 
     def is_active_goal_reached(
         self,
@@ -2391,7 +2434,7 @@ class FrontierDetector(Node):
         # Allow the active goal to move slightly as the frontier/candidate is
         # regenerated from the latest map, but do not silently jump to another
         # unrelated frontier.
-        if best_distance_m <= self.goal_blacklist_radius_m:
+        if best_distance_m <= self.active_goal_match_radius_m:
             return best_candidate
 
         return None

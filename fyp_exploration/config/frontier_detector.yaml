@@ -133,12 +133,14 @@ frontier_detector:
 
     # Planner / goal manager
     goal_reached_distance_m: 0.35
-    goal_timeout_s: 30.0
+    goal_timeout_s: 90.0
     goal_blacklist_radius_m: 0.50
     goal_blacklist_duration_s: 20.0
     minimum_goal_switch_improvement: 1.50
     enable_goal_timeout: true
     enable_goal_blacklist: true
+    active_goal_match_radius_m: 1.0
+    active_goal_invalid_grace_cycles: 5
 
     # RViz marker settings
     marker_scale_m: 0.08
