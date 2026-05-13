@@ -157,7 +157,7 @@ frontier_detector:
     enable_path_planning: true
     allow_diagonal_motion: true
     prevent_diagonal_corner_cutting: true
-    path_obstacle_clearance_m: 0.10
+    path_obstacle_clearance_m: 0.15
     require_reachable: true
 
 
@@ -197,7 +197,7 @@ frontier_detector:
     #   min_obstacle_clearance_m  = candidate goal clearance
     #   path_obstacle_clearance_m = A* path clearance
     #   region_anchor_clearance_m = region anchor clearance
-    region_anchor_clearance_m: 0.20
+    region_anchor_clearance_m: 0.50
 
 
     # =========================================================================
