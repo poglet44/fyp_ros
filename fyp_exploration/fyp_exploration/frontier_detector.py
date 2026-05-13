@@ -45,6 +45,8 @@ class FrontierRegion:
     region_id: int
     candidate_indices: List[int]
     centroid_cell: Cell
+    anchor_cell: Cell
+    centroid_distance_m: float
     total_frontier_cells: int
     total_unknown_gain_cells: int
     min_path_length_m: float
@@ -535,6 +537,7 @@ class FrontierDetector(Node):
                 msg=msg,
                 candidates=candidates,
                 path_safe_mask=path_safe_mask,
+                robot_cell=robot_cell,
             )
 
             # Compute scores before selection so both candidate and region
@@ -1931,6 +1934,7 @@ class FrontierDetector(Node):
         msg: OccupancyGrid,
         candidates: List[FrontierCandidate],
         path_safe_mask: np.ndarray,
+        robot_cell: Optional[Cell],
     ) -> List[FrontierRegion]:
         if not candidates:
             return []
@@ -1987,20 +1991,41 @@ class FrontierDetector(Node):
             raw_centroid_x = weighted_x / float(total_weight)
             raw_centroid_y = weighted_y / float(total_weight)
 
-            # The raw weighted centroid can fall in occupied, unknown, or unsafe space.
-            # For region visualisation and future graph use, snap the region centroid
-            # to the valid candidate goal closest to the raw centroid.
-            centroid_cell = self.closest_candidate_goal_to_point(
-                candidates=candidates,
-                candidate_indices=candidate_indices,
+            # Region centroid:
+            # True weighted centre of the candidate goals in this region.
+            # This is allowed to be a conceptual/geometric point and may not
+            # itself be safely navigable.
+            centroid_x = int(round(raw_centroid_x))
+            centroid_y = int(round(raw_centroid_y))
+
+            centroid_x = max(0, min(msg.info.width - 1, centroid_x))
+            centroid_y = max(0, min(msg.info.height - 1, centroid_y))
+
+            centroid_cell = (centroid_x, centroid_y)
+
+            # Region anchor:
+            # Nearest safe cell to the true centroid. This is the point that can
+            # later be used as a navigable region-level target.
+            anchor_cell = self.nearest_safe_cell_to_point(
+                msg=msg,
+                path_safe_mask=path_safe_mask,
                 target_x=raw_centroid_x,
                 target_y=raw_centroid_y,
             )
+
+            if robot_cell is None:
+                centroid_distance_m = float("inf")
+            else:
+                centroid_dx_m = (centroid_cell[0] - robot_cell[0]) * msg.info.resolution
+                centroid_dy_m = (centroid_cell[1] - robot_cell[1]) * msg.info.resolution
+                centroid_distance_m = math.hypot(centroid_dx_m, centroid_dy_m)
 
             region = FrontierRegion(
                 region_id=region_id,
                 candidate_indices=candidate_indices,
                 centroid_cell=centroid_cell,
+                anchor_cell=anchor_cell,
+                centroid_distance_m=centroid_distance_m,
                 total_frontier_cells=total_frontier_cells,
                 total_unknown_gain_cells=total_unknown_gain_cells,
                 min_path_length_m=min_path_length_m,
@@ -2181,6 +2206,58 @@ class FrontierDetector(Node):
             return candidates[candidate_indices[0]].goal_cell
 
         return best_cell
+
+    def nearest_safe_cell_to_point(
+        self,
+        msg: OccupancyGrid,
+        path_safe_mask: np.ndarray,
+        target_x: float,
+        target_y: float,
+    ) -> Cell:
+        width = msg.info.width
+        height = msg.info.height
+
+        start_x = int(round(target_x))
+        start_y = int(round(target_y))
+
+        start_x = max(0, min(width - 1, start_x))
+        start_y = max(0, min(height - 1, start_y))
+
+        if path_safe_mask[start_y, start_x]:
+            return (start_x, start_y)
+
+        max_radius = max(width, height)
+
+        for radius in range(1, max_radius + 1):
+            best_cell: Optional[Cell] = None
+            best_distance_sq = float("inf")
+
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    if abs(dx) != radius and abs(dy) != radius:
+                        continue
+
+                    x = start_x + dx
+                    y = start_y + dy
+
+                    if not self.in_bounds(x, y, width, height):
+                        continue
+
+                    if not path_safe_mask[y, x]:
+                        continue
+
+                    distance_sq = (x - target_x) * (x - target_x) + (y - target_y) * (y - target_y)
+
+                    if distance_sq < best_distance_sq:
+                        best_distance_sq = distance_sq
+                        best_cell = (x, y)
+
+            if best_cell is not None:
+                return best_cell
+
+        # Extremely defensive fallback. This should only happen if no safe cells
+        # exist in the map.
+        return (start_x, start_y)
 
     # -------------------------------------------------------------------------
     # Goal manager / planning state
@@ -2946,24 +3023,49 @@ class FrontierDetector(Node):
                 region.centroid_cell[1],
             )
 
+            anchor_x, anchor_y = self.cell_to_world(
+                msg,
+                region.anchor_cell[0],
+                region.anchor_cell[1],
+            )
+
             centroid = Marker()
             centroid.header = msg.header
             centroid.ns = "frontier_region_centroids"
             centroid.id = 100 + region.region_id
-            centroid.type = Marker.SPHERE
+            centroid.type = Marker.CUBE
             centroid.action = Marker.ADD
             centroid.pose.position.x = centroid_x
             centroid.pose.position.y = centroid_y
-            centroid.pose.position.z = 0.35
+            centroid.pose.position.z = 0.30
             centroid.pose.orientation.w = 1.0
-            centroid.scale.x = 0.45 if is_selected_region else 0.30
-            centroid.scale.y = 0.45 if is_selected_region else 0.30
-            centroid.scale.z = 0.45 if is_selected_region else 0.30
-            centroid.color.r = 1.0 if is_selected_region else r
-            centroid.color.g = 0.0 if is_selected_region else g
-            centroid.color.b = 1.0 if is_selected_region else b
-            centroid.color.a = 1.0
+            centroid.scale.x = 0.22
+            centroid.scale.y = 0.22
+            centroid.scale.z = 0.22
+            centroid.color.r = r
+            centroid.color.g = g
+            centroid.color.b = b
+            centroid.color.a = 0.65
             marker_array.markers.append(centroid)
+
+            anchor = Marker()
+            anchor.header = msg.header
+            anchor.ns = "frontier_region_anchors"
+            anchor.id = 400 + region.region_id
+            anchor.type = Marker.SPHERE
+            anchor.action = Marker.ADD
+            anchor.pose.position.x = anchor_x
+            anchor.pose.position.y = anchor_y
+            anchor.pose.position.z = 0.40
+            anchor.pose.orientation.w = 1.0
+            anchor.scale.x = 0.45 if is_selected_region else 0.30
+            anchor.scale.y = 0.45 if is_selected_region else 0.30
+            anchor.scale.z = 0.45 if is_selected_region else 0.30
+            anchor.color.r = 1.0 if is_selected_region else r
+            anchor.color.g = 0.0 if is_selected_region else g
+            anchor.color.b = 1.0 if is_selected_region else b
+            anchor.color.a = 1.0
+            marker_array.markers.append(anchor)
 
             lines = Marker()
             lines.header = msg.header
@@ -3020,9 +3122,15 @@ class FrontierDetector(Node):
                     best_candidate_score_text = "inf"
                     mean_candidate_score_text = "inf"
 
-                min_path_text = (
+                nearest_goal_distance_text = (
                     f"{region.min_path_length_m:.1f}m"
                     if math.isfinite(region.min_path_length_m)
+                    else "inf"
+                )
+
+                centroid_distance_text = (
+                    f"{region.centroid_distance_m:.1f}m"
+                    if math.isfinite(region.centroid_distance_m)
                     else "inf"
                 )
 
@@ -3040,8 +3148,8 @@ class FrontierDetector(Node):
                 text.id = 300 + region.region_id
                 text.type = Marker.TEXT_VIEW_FACING
                 text.action = Marker.ADD
-                text.pose.position.x = centroid_x
-                text.pose.position.y = centroid_y
+                text.pose.position.x = anchor_x
+                text.pose.position.y = anchor_y
                 text.pose.position.z = 0.95
                 text.pose.orientation.w = 1.0
                 text.scale.z = 0.32
@@ -3052,7 +3160,8 @@ class FrontierDetector(Node):
                 text.text = (
                     f"{selected_prefix}R{region.region_id}\n"
                     f"goals={len(region.candidate_indices)} gain={region.total_unknown_gain_cells}\n"
-                    f"min_d={min_path_text}\n"
+                    f"goal_d={nearest_goal_distance_text}\n"
+                    f"cent_d={centroid_distance_text}\n"
                     f"best={best_candidate_score_text} mean={mean_candidate_score_text}\n"
                     f"score={region_score_text}"
                 )
