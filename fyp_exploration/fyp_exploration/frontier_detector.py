@@ -39,6 +39,11 @@ class FrontierCandidate:
     score: float = float("inf")
     region_id: int = -1
 
+    # Extra scoring/debug metrics.
+    gain_rate: float = 0.0
+    information_density: float = 0.0
+    stability_cycles: int = 1
+
 
 @dataclass
 class FrontierRegion:
@@ -51,6 +56,17 @@ class FrontierRegion:
     total_unknown_gain_cells: int
     min_path_length_m: float
     score: float = float("inf")
+
+    # Region scoring/debug components.
+    best_candidate_score: float = float("inf")
+    mean_candidate_score: float = float("inf")
+    candidate_aggregate_score: float = float("inf")
+    region_information_density: float = 0.0
+    region_distance_component: float = 0.0
+    region_gain_bonus: float = 0.0
+    region_candidate_count_bonus: float = 0.0
+    region_density_bonus: float = 0.0
+    region_switch_penalty_applied: float = 0.0
 
 
 @dataclass
@@ -117,6 +133,10 @@ class FrontierDetector(Node):
         self.declare_parameter("selection_policy", "nearest")
         self.declare_parameter("utility_distance_weight", 1.0)
         self.declare_parameter("utility_gain_weight", 0.02)
+        self.declare_parameter("stability_weight", 0.10)
+        self.declare_parameter("density_weight", 0.10)
+        self.declare_parameter("candidate_stability_match_radius_m", 0.75)
+        self.declare_parameter("max_candidate_stability_cycles", 20)
 
         def declare_parameter_if_not_declared(name, default_value):
             if not self.has_parameter(name):
@@ -148,6 +168,8 @@ class FrontierDetector(Node):
         self.declare_parameter("region_distance_weight", 1.0)
         self.declare_parameter("region_gain_weight", 0.02)
         self.declare_parameter("region_candidate_mean_weight", 0.35)
+        self.declare_parameter("region_candidate_count_weight", 0.0)
+        self.declare_parameter("region_density_weight", 0.0)
 
         # Goal hysteresis
         self.declare_parameter("enable_goal_hysteresis", True)
@@ -218,6 +240,15 @@ class FrontierDetector(Node):
         self.selection_policy = str(self.get_parameter("selection_policy").value)
         self.utility_distance_weight = float(self.get_parameter("utility_distance_weight").value)
         self.utility_gain_weight = float(self.get_parameter("utility_gain_weight").value)
+        self.stability_weight = float(self.get_parameter("stability_weight").value)
+        self.density_weight = float(self.get_parameter("density_weight").value)
+        self.candidate_stability_match_radius_m = float(
+            self.get_parameter("candidate_stability_match_radius_m").value
+        )
+        self.max_candidate_stability_cycles = int(
+            self.get_parameter("max_candidate_stability_cycles").value
+        )
+        self.max_candidate_stability_cycles = max(1, self.max_candidate_stability_cycles)
 
         self.goal_reached_distance_m = float(
             self.get_parameter("goal_reached_distance_m").value
@@ -271,6 +302,12 @@ class FrontierDetector(Node):
         self.region_candidate_mean_weight = max(
             0.0,
             min(1.0, self.region_candidate_mean_weight),
+        )
+        self.region_candidate_count_weight = float(
+            self.get_parameter("region_candidate_count_weight").value
+        )
+        self.region_density_weight = float(
+            self.get_parameter("region_density_weight").value
         )
 
         self.enable_goal_hysteresis = bool(self.get_parameter("enable_goal_hysteresis").value)
@@ -330,6 +367,11 @@ class FrontierDetector(Node):
         self.active_goal_invalid_count = 0
         self.blacklisted_goals: List[BlacklistedGoal] = []
 
+        # Candidate persistence memory.
+        # Key is previous candidate goal cell, value is number of consecutive
+        # planning cycles a nearby candidate has persisted.
+        self.previous_candidate_stability: Dict[Cell, int] = {}
+
         # Per-cycle planner diagnostics for CSV logging.
         self.current_planner_status = "uninitialised"
         self.current_goal_reached = False
@@ -374,8 +416,10 @@ class FrontierDetector(Node):
         self.log_dir: Optional[FilePath] = None
         self.map_metrics_file = None
         self.candidate_metrics_file = None
+        self.region_metrics_file = None
         self.map_metrics_writer = None
         self.candidate_metrics_writer = None
+        self.region_metrics_writer = None
         self.run_id: Optional[int] = None
 
         self.setup_logging()
@@ -425,6 +469,7 @@ class FrontierDetector(Node):
         planning_time_ms = 0.0
 
         self.map_count += 1
+        self.current_map_resolution_m = msg.info.resolution
         self.current_msg_for_distance = msg
 
         width = msg.info.width
@@ -546,6 +591,10 @@ class FrontierDetector(Node):
             # Without this, regions can show score=inf when selection_mode is
             # candidates_only, because region scoring is otherwise only called
             # inside select_candidate_hierarchical().
+            self.update_candidate_metrics(
+                msg=msg,
+                candidates=candidates,
+            )
             self.compute_candidate_scores(candidates)
             self.compute_region_scores(
                 regions=frontier_regions,
@@ -651,6 +700,7 @@ class FrontierDetector(Node):
                 robot_x=robot_x,
                 robot_y=robot_y,
             )
+            self.log_region_metrics(msg=msg)
 
         if self.map_count % self.publish_debug_every_n_maps == 0 and not planning_ran:
             self.get_logger().info(
@@ -716,6 +766,11 @@ class FrontierDetector(Node):
         )
         self.candidate_metrics_file = open(
             self.log_dir / "frontier_candidate_metrics.csv",
+            mode="w",
+            newline="",
+        )
+        self.region_metrics_file = open(
+            self.log_dir / "frontier_region_metrics.csv",
             mode="w",
             newline="",
         )
@@ -836,14 +891,69 @@ class FrontierDetector(Node):
                 "candidate_rank_by_score",
                 "score",
                 "selection_policy",
+                "gain_rate",
+                "information_density",
+                "stability_cycles",
+                "score_nearest",
+                "score_utility",
+                "score_gain_rate",
+                "score_stable_utility",
+                "score_density_utility",
+                "rank_nearest",
+                "rank_utility",
+                "rank_gain_rate",
+                "rank_stable_utility",
+                "rank_density_utility",
+            ],
+        )
+
+        self.region_metrics_writer = csv.DictWriter(
+            self.region_metrics_file,
+            fieldnames=[
+                "run_id",
+                "stamp_sec",
+                "stamp_nanosec",
+                "ros_time_ns",
+                "map_count",
+                "selection_policy",
+                "selection_mode",
+                "region_id",
+                "is_selected_region",
+                "candidate_count",
+                "candidate_indices",
+                "centroid_cell_x",
+                "centroid_cell_y",
+                "anchor_cell_x",
+                "anchor_cell_y",
+                "centroid_distance_m",
+                "min_path_length_m",
+                "total_frontier_cells",
+                "total_unknown_gain_cells",
+                "region_information_density",
+                "best_candidate_score",
+                "mean_candidate_score",
+                "candidate_aggregate_score",
+                "region_distance_weight",
+                "region_gain_weight",
+                "region_candidate_mean_weight",
+                "region_candidate_count_weight",
+                "region_density_weight",
+                "region_distance_component",
+                "region_gain_bonus",
+                "region_candidate_count_bonus",
+                "region_density_bonus",
+                "region_switch_penalty_applied",
+                "region_score",
             ],
         )
 
         self.map_metrics_writer.writeheader()
         self.candidate_metrics_writer.writeheader()
+        self.region_metrics_writer.writeheader()
 
         self.map_metrics_file.flush()
         self.candidate_metrics_file.flush()
+        self.region_metrics_file.flush()
 
     def next_run_id(self, root: FilePath) -> int:
         max_id = 0
@@ -1171,7 +1281,10 @@ class FrontierDetector(Node):
             )
         }
 
+        policy_ranks = self.compute_candidate_policy_ranks(self.cached_candidates)
+
         for i, candidate in enumerate(self.cached_candidates):
+            policy_scores = self.compute_candidate_policy_scores(candidate)
             goal_yaw = self.pose_yaw(candidate.goal_pose)
 
             euclidean_distance_m = ""
@@ -1245,10 +1358,75 @@ class FrontierDetector(Node):
                     "candidate_rank_by_score": rank_by_score.get(id(candidate), ""),
                     "score": candidate.score,
                     "selection_policy": self.selection_policy,
+                    "gain_rate": candidate.gain_rate,
+                    "information_density": candidate.information_density,
+                    "stability_cycles": candidate.stability_cycles,
+                    "score_nearest": policy_scores["nearest"],
+                    "score_utility": policy_scores["utility"],
+                    "score_gain_rate": policy_scores["gain_rate"],
+                    "score_stable_utility": policy_scores["stable_utility"],
+                    "score_density_utility": policy_scores["density_utility"],
+                    "rank_nearest": policy_ranks["nearest"].get(i, ""),
+                    "rank_utility": policy_ranks["utility"].get(i, ""),
+                    "rank_gain_rate": policy_ranks["gain_rate"].get(i, ""),
+                    "rank_stable_utility": policy_ranks["stable_utility"].get(i, ""),
+                    "rank_density_utility": policy_ranks["density_utility"].get(i, ""),
                 }
             )
 
         self.candidate_metrics_file.flush()
+
+    def log_region_metrics(self, msg: OccupancyGrid) -> None:
+        if not self.enable_logging or self.region_metrics_writer is None:
+            return
+
+        ros_time_ns = self.get_clock().now().nanoseconds
+
+        for region in self.cached_frontier_regions:
+            self.region_metrics_writer.writerow(
+                {
+                    "run_id": self.run_id,
+                    "stamp_sec": msg.header.stamp.sec,
+                    "stamp_nanosec": msg.header.stamp.nanosec,
+                    "ros_time_ns": ros_time_ns,
+                    "map_count": self.map_count,
+                    "selection_policy": self.selection_policy,
+                    "selection_mode": self.selection_mode,
+                    "region_id": region.region_id,
+                    "is_selected_region": int(
+                        self.cached_selected_region_id == region.region_id
+                    ),
+                    "candidate_count": len(region.candidate_indices),
+                    "candidate_indices": ";".join(
+                        str(index) for index in region.candidate_indices
+                    ),
+                    "centroid_cell_x": region.centroid_cell[0],
+                    "centroid_cell_y": region.centroid_cell[1],
+                    "anchor_cell_x": region.anchor_cell[0],
+                    "anchor_cell_y": region.anchor_cell[1],
+                    "centroid_distance_m": region.centroid_distance_m,
+                    "min_path_length_m": region.min_path_length_m,
+                    "total_frontier_cells": region.total_frontier_cells,
+                    "total_unknown_gain_cells": region.total_unknown_gain_cells,
+                    "region_information_density": region.region_information_density,
+                    "best_candidate_score": region.best_candidate_score,
+                    "mean_candidate_score": region.mean_candidate_score,
+                    "candidate_aggregate_score": region.candidate_aggregate_score,
+                    "region_distance_weight": self.region_distance_weight,
+                    "region_gain_weight": self.region_gain_weight,
+                    "region_candidate_mean_weight": self.region_candidate_mean_weight,
+                    "region_candidate_count_weight": self.region_candidate_count_weight,
+                    "region_density_weight": self.region_density_weight,
+                    "region_distance_component": region.region_distance_component,
+                    "region_gain_bonus": region.region_gain_bonus,
+                    "region_candidate_count_bonus": region.region_candidate_count_bonus,
+                    "region_density_bonus": region.region_density_bonus,
+                    "region_switch_penalty_applied": region.region_switch_penalty_applied,
+                    "region_score": region.score,
+                }
+            )
+
+        self.region_metrics_file.flush()
 
     def pose_yaw(self, pose: Pose) -> float:
         return self.quaternion_to_yaw(pose.orientation)
@@ -1266,6 +1444,10 @@ class FrontierDetector(Node):
         if self.candidate_metrics_file is not None:
             self.candidate_metrics_file.flush()
             self.candidate_metrics_file.close()
+
+        if self.region_metrics_file is not None:
+            self.region_metrics_file.flush()
+            self.region_metrics_file.close()
 
         return super().destroy_node()
 
@@ -2655,15 +2837,48 @@ class FrontierDetector(Node):
                 + self.region_candidate_mean_weight * mean_candidate_score
             )
 
-            score = (
-                self.region_distance_weight * candidate_aggregate_score
-                - self.region_gain_weight * float(region.total_unknown_gain_cells)
+            region_candidate_count = len(region_candidates)
+            region_information_density = (
+                float(region.total_unknown_gain_cells)
+                / float(max(region.total_frontier_cells, 1))
             )
+
+            region_distance_component = (
+                self.region_distance_weight * candidate_aggregate_score
+            )
+            region_gain_bonus = (
+                self.region_gain_weight * float(region.total_unknown_gain_cells)
+            )
+            region_candidate_count_bonus = (
+                self.region_candidate_count_weight * math.log1p(float(region_candidate_count))
+            )
+            region_density_bonus = (
+                self.region_density_weight * region_information_density
+            )
+
+            score = (
+                region_distance_component
+                - region_gain_bonus
+                - region_candidate_count_bonus
+                - region_density_bonus
+            )
+
+            region_switch_penalty_applied = 0.0
 
             if self.previous_active_region_centroid_cell is not None:
                 if region.centroid_cell != self.previous_active_region_centroid_cell:
-                    score += self.region_switch_penalty
+                    region_switch_penalty_applied = self.region_switch_penalty
+                    score += region_switch_penalty_applied
 
+            region.best_candidate_score = best_candidate_score
+            region.mean_candidate_score = mean_candidate_score
+            region.candidate_aggregate_score = candidate_aggregate_score
+            region.region_information_density = region_information_density
+            region.region_distance_component = region_distance_component
+            region.region_gain_bonus = region_gain_bonus
+            region.region_candidate_count_bonus = region_candidate_count_bonus
+            region.region_density_bonus = region_density_bonus
+            region.region_switch_penalty_applied = region_switch_penalty_applied
             region.score = score
 
     def find_previous_active_region(
@@ -2757,26 +2972,165 @@ class FrontierDetector(Node):
         self.update_hysteresis_state(selected)
         return selected
 
-    def compute_candidate_scores(self, candidates: List[FrontierCandidate]) -> None:
-        if self.selection_policy == "nearest":
-            for candidate in candidates:
-                candidate.score = candidate.path_length_m
-            return
 
-        if self.selection_policy == "utility":
-            for candidate in candidates:
-                candidate.score = (
-                    self.utility_distance_weight * candidate.path_length_m
-                    - self.utility_gain_weight * float(candidate.unknown_gain_cells)
-                )
-            return
-
-        self.get_logger().warn(
-            f'Unknown selection_policy="{self.selection_policy}". Falling back to nearest.'
-        )
+    def update_candidate_metrics(
+        self,
+        msg: OccupancyGrid,
+        candidates: List[FrontierCandidate],
+    ) -> None:
+        new_stability: Dict[Cell, int] = {}
 
         for candidate in candidates:
-            candidate.score = candidate.path_length_m
+            candidate.gain_rate = self.compute_gain_rate(candidate)
+            candidate.information_density = self.compute_information_density(candidate)
+            candidate.stability_cycles = self.find_candidate_stability(candidate)
+
+            new_stability[candidate.goal_cell] = candidate.stability_cycles
+
+        self.previous_candidate_stability = new_stability
+
+    def compute_gain_rate(self, candidate: FrontierCandidate) -> float:
+        if not math.isfinite(candidate.path_length_m):
+            return 0.0
+
+        distance_m = max(candidate.path_length_m, 1.0e-6)
+        return float(candidate.unknown_gain_cells) / distance_m
+
+    def compute_information_density(self, candidate: FrontierCandidate) -> float:
+        frontier_size = max(candidate.cluster_size_cells, 1)
+        return float(candidate.unknown_gain_cells) / float(frontier_size)
+
+    def find_candidate_stability(self, candidate: FrontierCandidate) -> int:
+        if not self.previous_candidate_stability:
+            return 1
+
+        match_radius_cells = max(
+            1,
+            int(math.ceil(
+                self.candidate_stability_match_radius_m / max(1.0e-9, self.current_map_resolution_m)
+            )),
+        )
+
+        best_previous_stability = 0
+        best_distance_sq = float("inf")
+
+        for previous_cell, previous_stability in self.previous_candidate_stability.items():
+            dx = candidate.goal_cell[0] - previous_cell[0]
+            dy = candidate.goal_cell[1] - previous_cell[1]
+            distance_sq = dx * dx + dy * dy
+
+            if distance_sq > match_radius_cells * match_radius_cells:
+                continue
+
+            if distance_sq < best_distance_sq:
+                best_distance_sq = distance_sq
+                best_previous_stability = previous_stability
+
+        return min(
+            best_previous_stability + 1,
+            self.max_candidate_stability_cycles,
+        ) if best_previous_stability > 0 else 1
+
+
+    def compute_candidate_policy_scores(
+        self,
+        candidate: FrontierCandidate,
+    ) -> Dict[str, float]:
+        if not math.isfinite(candidate.path_length_m):
+            return {
+                "nearest": float("inf"),
+                "utility": float("inf"),
+                "gain_rate": float("inf"),
+                "stable_utility": float("inf"),
+                "density_utility": float("inf"),
+            }
+
+        nearest_score = candidate.path_length_m
+
+        utility_score = (
+            self.utility_distance_weight * candidate.path_length_m
+            - self.utility_gain_weight * float(candidate.unknown_gain_cells)
+        )
+
+        gain_rate_score = candidate.path_length_m / max(
+            float(candidate.unknown_gain_cells),
+            1.0,
+        )
+
+        stable_utility_score = (
+            self.utility_distance_weight * candidate.path_length_m
+            - self.utility_gain_weight * float(candidate.unknown_gain_cells)
+            - self.stability_weight * float(candidate.stability_cycles)
+        )
+
+        density_utility_score = (
+            self.utility_distance_weight * candidate.path_length_m
+            - self.utility_gain_weight * float(candidate.unknown_gain_cells)
+            - self.density_weight * candidate.information_density
+        )
+
+        return {
+            "nearest": nearest_score,
+            "utility": utility_score,
+            "gain_rate": gain_rate_score,
+            "stable_utility": stable_utility_score,
+            "density_utility": density_utility_score,
+        }
+
+    def compute_candidate_policy_ranks(
+        self,
+        candidates: List[FrontierCandidate],
+    ) -> Dict[str, Dict[int, int]]:
+        policy_names = [
+            "nearest",
+            "utility",
+            "gain_rate",
+            "stable_utility",
+            "density_utility",
+        ]
+
+        scores_by_policy: Dict[str, List[Tuple[int, float]]] = {
+            policy_name: []
+            for policy_name in policy_names
+        }
+
+        for candidate_index, candidate in enumerate(candidates):
+            policy_scores = self.compute_candidate_policy_scores(candidate)
+
+            for policy_name in policy_names:
+                scores_by_policy[policy_name].append(
+                    (candidate_index, policy_scores[policy_name])
+                )
+
+        ranks_by_policy: Dict[str, Dict[int, int]] = {
+            policy_name: {}
+            for policy_name in policy_names
+        }
+
+        for policy_name in policy_names:
+            sorted_scores = sorted(
+                scores_by_policy[policy_name],
+                key=lambda item: item[1],
+            )
+
+            for rank, (candidate_index, _) in enumerate(sorted_scores, start=1):
+                ranks_by_policy[policy_name][candidate_index] = rank
+
+        return ranks_by_policy
+
+
+    def compute_candidate_scores(self, candidates: List[FrontierCandidate]) -> None:
+        for candidate in candidates:
+            policy_scores = self.compute_candidate_policy_scores(candidate)
+
+            if self.selection_policy in policy_scores:
+                candidate.score = policy_scores[self.selection_policy]
+            else:
+                self.get_logger().warn(
+                    f"Unknown selection_policy='{self.selection_policy}'. Falling back to nearest."
+                )
+                candidate.score = policy_scores["nearest"]
+
 
     def find_previous_selected_candidate(
         self,
@@ -3140,6 +3494,11 @@ class FrontierDetector(Node):
                     else "inf"
                 )
 
+                region_density = (
+                    float(region.total_unknown_gain_cells)
+                    / float(max(region.total_frontier_cells, 1))
+                )
+
                 selected_prefix = "*" if is_selected_region else ""
 
                 text = Marker()
@@ -3163,6 +3522,7 @@ class FrontierDetector(Node):
                     f"goal_d={nearest_goal_distance_text}\n"
                     f"cent_d={centroid_distance_text}\n"
                     f"best={best_candidate_score_text} mean={mean_candidate_score_text}\n"
+                    f"dens={region_density:.1f}\n"
                     f"score={region_score_text}"
                 )
                 marker_array.markers.append(text)
@@ -3281,7 +3641,8 @@ class FrontierDetector(Node):
                     text.text = (
                         f"{selected_prefix}C{i} R{candidate.region_id}\n"
                         f"d={path_text} s={score_text}\n"
-                        f"g={candidate.unknown_gain_cells}"
+                        f"g={candidate.unknown_gain_cells} gr={candidate.gain_rate:.1f}\n"
+                        f"st={candidate.stability_cycles} dens={candidate.information_density:.1f}"
                     )
                 else:
                     text.color.r = 0.85
@@ -3291,7 +3652,8 @@ class FrontierDetector(Node):
                     text.text = (
                         f"C{i} R{candidate.region_id}\n"
                         f"d={path_text} s={score_text}\n"
-                        f"g={candidate.unknown_gain_cells}"
+                        f"g={candidate.unknown_gain_cells} gr={candidate.gain_rate:.1f}\n"
+                        f"st={candidate.stability_cycles}"
                     )
 
                 marker_array.markers.append(text)
