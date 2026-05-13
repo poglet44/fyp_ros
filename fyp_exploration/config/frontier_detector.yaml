@@ -269,7 +269,7 @@ frontier_detector:
     selection_policy: utility
 
     utility_distance_weight: 1.0
-    utility_gain_weight: 0.02
+    utility_gain_weight: 0.005
 
     stability_weight: 0.10
     density_weight: 0.10

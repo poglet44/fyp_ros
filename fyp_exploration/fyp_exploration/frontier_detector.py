@@ -421,6 +421,7 @@ class FrontierDetector(Node):
         self.map_metrics_file = None
         self.candidate_metrics_file = None
         self.region_metrics_file = None
+        self.run_config_file = None
         self.map_metrics_writer = None
         self.candidate_metrics_writer = None
         self.region_metrics_writer = None
@@ -787,6 +788,11 @@ class FrontierDetector(Node):
             mode="w",
             newline="",
         )
+        self.run_config_file = open(
+            self.log_dir / "run_config.csv",
+            mode="w",
+            newline="",
+        )
 
         self.map_metrics_writer = csv.DictWriter(
             self.map_metrics_file,
@@ -964,9 +970,70 @@ class FrontierDetector(Node):
         self.candidate_metrics_writer.writeheader()
         self.region_metrics_writer.writeheader()
 
+        self.write_run_config()
+
         self.map_metrics_file.flush()
         self.candidate_metrics_file.flush()
         self.region_metrics_file.flush()
+        self.run_config_file.flush()
+
+    def write_run_config(self) -> None:
+        if self.run_config_file is None:
+            return
+
+        writer = csv.DictWriter(
+            self.run_config_file,
+            fieldnames=["parameter", "value"],
+        )
+        writer.writeheader()
+
+        parameter_names = [
+            "selection_mode",
+            "selection_policy",
+            "utility_distance_weight",
+            "utility_gain_weight",
+            "stability_weight",
+            "density_weight",
+            "region_distance_weight",
+            "region_gain_weight",
+            "region_candidate_mean_weight",
+            "region_candidate_count_weight",
+            "region_density_weight",
+            "region_switch_margin",
+            "region_switch_penalty",
+            "enable_goal_hysteresis",
+            "hysteresis_switch_margin",
+            "enable_goal_timeout",
+            "enable_goal_blacklist",
+            "minimum_goal_switch_improvement",
+            "min_obstacle_clearance_m",
+            "path_obstacle_clearance_m",
+            "region_anchor_clearance_m",
+            "goal_search_radius_m",
+            "candidate_validity_radius_m",
+            "goal_reached_distance_m",
+            "frontier_cluster_merge_distance_m",
+            "frontier_region_merge_distance_m",
+            "frontier_region_merge_path_distance_m",
+            "use_path_distance_for_regions",
+            "max_goals_to_publish",
+            "plan_every_n_maps",
+            "min_plan_period_s",
+            "require_reachable",
+            "robot_frame",
+            "map_topic",
+        ]
+
+        for name in parameter_names:
+            value = getattr(self, name, "")
+            writer.writerow(
+                {
+                    "parameter": name,
+                    "value": value,
+                }
+            )
+
+        self.run_config_file.flush()
 
     def next_run_id(self, root: FilePath) -> int:
         max_id = 0
@@ -1461,6 +1528,10 @@ class FrontierDetector(Node):
         if self.region_metrics_file is not None:
             self.region_metrics_file.flush()
             self.region_metrics_file.close()
+
+        if self.run_config_file is not None:
+            self.run_config_file.flush()
+            self.run_config_file.close()
 
         return super().destroy_node()
 
