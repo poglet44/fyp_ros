@@ -1775,9 +1775,17 @@ class FrontierDetector(Node):
                 total_unknown_gain_cells += candidate.unknown_gain_cells
                 min_path_length_m = min(min_path_length_m, candidate.path_length_m)
 
-            centroid_cell = (
-                int(round(weighted_x / float(total_weight))),
-                int(round(weighted_y / float(total_weight))),
+            raw_centroid_x = weighted_x / float(total_weight)
+            raw_centroid_y = weighted_y / float(total_weight)
+
+            # The raw weighted centroid can fall in occupied, unknown, or unsafe space.
+            # For region visualisation and future graph use, snap the region centroid
+            # to the valid candidate goal closest to the raw centroid.
+            centroid_cell = self.closest_candidate_goal_to_point(
+                candidates=candidates,
+                candidate_indices=candidate_indices,
+                target_x=raw_centroid_x,
+                target_y=raw_centroid_y,
             )
 
             region = FrontierRegion(
@@ -1935,6 +1943,35 @@ class FrontierDetector(Node):
                 heapq.heappush(open_heap, (priority, next_cost, neighbour))
 
         return float("inf")
+
+    def closest_candidate_goal_to_point(
+        self,
+        candidates: List[FrontierCandidate],
+        candidate_indices: List[int],
+        target_x: float,
+        target_y: float,
+    ) -> Cell:
+        best_cell: Optional[Cell] = None
+        best_distance_sq = float("inf")
+
+        for candidate_index in candidate_indices:
+            if candidate_index < 0 or candidate_index >= len(candidates):
+                continue
+
+            candidate = candidates[candidate_index]
+            dx = candidate.goal_cell[0] - target_x
+            dy = candidate.goal_cell[1] - target_y
+            distance_sq = dx * dx + dy * dy
+
+            if distance_sq < best_distance_sq:
+                best_distance_sq = distance_sq
+                best_cell = candidate.goal_cell
+
+        if best_cell is None:
+            # This should not occur for a valid region, but keep a safe fallback.
+            return candidates[candidate_indices[0]].goal_cell
+
+        return best_cell
 
     def select_candidate_hierarchical(
         self,
