@@ -1,0 +1,19 @@
+exploration_nav2_simple_executor:
+  ros__parameters:
+    selected_goal_topic: "/selected_frontier_goal"
+    exploration_status_topic: "/exploration_status"
+    navigate_action_name: "/navigate_to_pose"
+
+    required_goal_frame: "map"
+    enforce_required_goal_frame: true
+
+    goal_timeout_s: 90.0
+    abort_cooldown_s: 5.0
+    duplicate_goal_tolerance_m: 0.25
+
+    wait_for_server_timeout_s: 5.0
+
+    terminal_status_values:
+      - "COMPLETE"
+      - "NO_REACHABLE_FRONTIERS"
+      - "EXPLORATION_COMPLETE"

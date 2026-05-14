@@ -15,7 +15,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("input_topic", default_value="/projected_map"),
         DeclareLaunchArgument("output_topic", default_value="/exploration_grid"),
-        DeclareLaunchArgument("inflation_radius_m", default_value="0.1"),
+        DeclareLaunchArgument("inflation_radius_m", default_value="0.15"),
         DeclareLaunchArgument("occupied_threshold", default_value="50"),
 
         # Add unknown border around /exploration_grid so the frontier detector
