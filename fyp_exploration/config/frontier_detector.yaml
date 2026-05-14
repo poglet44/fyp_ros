@@ -222,7 +222,7 @@ frontier_detector:
     #   otherwise candidates_only.
     #
     use_region_hierarchy: true
-    selection_mode: regions_then_candidates
+    selection_mode: candidates_only
 
 
     # =========================================================================
@@ -269,7 +269,7 @@ frontier_detector:
     selection_policy: utility
 
     utility_distance_weight: 1.0
-    utility_gain_weight: 0.005
+    utility_gain_weight: 0.020
 
     stability_weight: 0.10
     density_weight: 0.10
@@ -423,7 +423,7 @@ frontier_detector:
     # For clean candidate-policy comparisons, set:
     #   enable_goal_hysteresis: false
     #
-    enable_goal_hysteresis: true
+    enable_goal_hysteresis: false
     hysteresis_goal_match_distance_m: 0.75
     hysteresis_switch_margin: 0.75
 
@@ -460,7 +460,7 @@ frontier_detector:
     goal_timeout_s: 90.0
     goal_blacklist_radius_m: 0.50
     goal_blacklist_duration_s: 20.0
-    minimum_goal_switch_improvement: 1.50
+    minimum_goal_switch_improvement: 0.00
     enable_goal_timeout: true
     enable_goal_blacklist: true
     active_goal_match_radius_m: 1.0
