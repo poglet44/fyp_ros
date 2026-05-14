@@ -5,7 +5,7 @@ exploration_nav2_executor:
 
     # If a new selected goal is closer than this to the active Nav2 goal,
     # keep the current Nav2 goal.
-    goal_replace_distance_m: 0.75
+    goal_replace_distance_m: 1.25
 
     # Cancel a goal if Nav2 has not completed it within this time.
     goal_timeout_s: 90.0
