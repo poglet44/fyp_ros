@@ -33,6 +33,8 @@ setup(
         'console_scripts': [
             'frontier_detector = fyp_exploration.frontier_detector:main',
             'exploration_nav2_executor = fyp_exploration.exploration_nav2_executor:main',
+            'exploration_path_nav2_executor = fyp_exploration.exploration_path_nav2_executor:main',
+            'exploration_status_monitor = fyp_exploration.exploration_status_monitor:main',
         ],
     },
 )

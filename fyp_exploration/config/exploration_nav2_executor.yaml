@@ -1,22 +1,26 @@
 exploration_nav2_executor:
   ros__parameters:
     selected_goal_topic: "/selected_frontier_goal"
+    exploration_status_topic: "/exploration_status"
     navigate_action_name: "/navigate_to_pose"
 
-    # If a new selected goal is closer than this to the active Nav2 goal,
-    # keep the current Nav2 goal.
     goal_replace_distance_m: 1.25
-
-    # Cancel a goal if Nav2 has not completed it within this time.
     goal_timeout_s: 90.0
 
-    # Startup / retry wait for Nav2 action server.
+    # Fallback only. Main completion behaviour now comes from /exploration_status.
+    selected_goal_stale_timeout_s: 5.0
+
     wait_for_server_timeout_s: 5.0
 
-    # Goal frame safety checks.
     ignore_goals_without_frame_id: true
     required_goal_frame: "map"
     enforce_required_goal_frame: true
 
-    # Reserved for later if we add periodic status logging.
-    status_log_period_s: 2.0
+    cancel_on_terminal_status: true
+    terminal_status_values:
+      - "COMPLETE"
+      - "NO_REACHABLE_FRONTIERS"
+      - "EXPLORATION_COMPLETE"
+
+    active_status_values:
+      - "ACTIVE"
