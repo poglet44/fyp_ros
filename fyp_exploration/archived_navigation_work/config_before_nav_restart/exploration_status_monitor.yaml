@@ -1,0 +1,14 @@
+exploration_status_monitor:
+  ros__parameters:
+    frontier_goals_topic: "/frontier_goals"
+    selected_goal_topic: "/selected_frontier_goal"
+    exploration_status_topic: "/exploration_status"
+
+    publish_period_s: 0.5
+    startup_grace_s: 8.0
+
+    # COMPLETE is only declared if both of these are true:
+    #   1. no non-empty /frontier_goals for this long
+    #   2. no /selected_frontier_goal for this long
+    complete_confirm_s: 20.0
+    selected_goal_silent_confirm_s: 20.0

@@ -1,0 +1,28 @@
+exploration_path_nav2_executor:
+  ros__parameters:
+    frontier_path_topic: "/frontier_path"
+    selected_goal_topic: "/selected_frontier_goal"
+    exploration_status_topic: "/exploration_status"
+    navigate_action_name: "/navigate_to_pose"
+
+    robot_frame: "base_footprint"
+
+    path_stale_timeout_s: 3.0
+
+    path_lookahead_distance_m: 0.90
+    subgoal_reached_distance_m: 0.35
+    subgoal_replace_distance_m: 0.75
+
+    goal_timeout_s: 45.0
+    control_period_s: 0.20
+    wait_for_server_timeout_s: 5.0
+
+    use_selected_goal_fallback: true
+
+    abort_blacklist_radius_m: 0.60
+    abort_blacklist_timeout_s: 30.0
+
+    terminal_status_values:
+      - "COMPLETE"
+      - "NO_REACHABLE_FRONTIERS"
+      - "EXPLORATION_COMPLETE"

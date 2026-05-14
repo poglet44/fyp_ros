@@ -1,0 +1,474 @@
+frontier_detector:
+  ros__parameters:
+
+    # =========================================================================
+    # 1. Logging
+    # =========================================================================
+    #
+    # enable_logging:
+    #   true  = write CSV logs for maps, candidates, and regions.
+    #   false = no CSV logging.
+    #
+    # log_root_dir:
+    #   New run folders are created here:
+    #     run_001_YYYY-MM-DD_HH-MM-SS
+    #
+    enable_logging: true
+    log_root_dir: ~/Sam/fyp_ws/logs
+
+
+    # =========================================================================
+    # 2. Input / Output Topics
+    # =========================================================================
+
+    # Input OccupancyGrid used for frontier detection.
+    map_topic: /exploration_grid
+
+    # Output debug/planner topics.
+    frontier_cells_topic: /frontier_cells
+    frontier_markers_topic: /frontier_markers
+    frontier_goals_topic: /frontier_goals
+    selected_goal_topic: /selected_frontier_goal
+    frontier_path_topic: /frontier_path
+    frontier_regions_markers_topic: /frontier_regions_markers
+
+
+    # =========================================================================
+    # 3. Robot Frame / TF
+    # =========================================================================
+    #
+    # Gazebo TurtleBot:
+    #   robot_frame: base_footprint
+    #
+    # Spot real setup:
+    #   robot_frame: body
+    #
+    robot_frame: base_footprint
+    tf_lookup_timeout_s: 0.20
+    robot_pose_warn_period_s: 5.0
+
+
+    # =========================================================================
+    # 4. OccupancyGrid Cell Convention
+    # =========================================================================
+    #
+    # These must match the /exploration_grid convention.
+    #
+    # unknown_value:
+    #   Cell value treated as unknown/unexplored.
+    #
+    # free_max_value:
+    #   Cells from 0 to this value are treated as free.
+    #
+    # occupied_min_value:
+    #   Cells at or above this value are treated as occupied.
+    #
+    unknown_value: -1
+    free_max_value: 0
+    occupied_min_value: 50
+
+
+    # =========================================================================
+    # 5. Frontier Extraction
+    # =========================================================================
+    #
+    # use_8_connected_frontiers:
+    #   true  = diagonally touching frontier cells are connected.
+    #   false = only 4-connected neighbours are used.
+    #
+    # min_cluster_size_cells:
+    #   Removes tiny frontier clusters.
+    #   Increase to suppress noise.
+    #   Decrease to keep small openings/frontiers.
+    #
+    use_8_connected_frontiers: true
+    min_cluster_size_cells: 3
+
+
+    # =========================================================================
+    # 6. Frontier Cluster Merging
+    # =========================================================================
+    #
+    # This merges nearby frontier clusters before candidate goals are generated.
+    # It affects the number and shape of candidate frontier goals.
+    #
+    # merge_nearby_frontier_clusters:
+    #   true  = nearby frontier clusters can be merged.
+    #   false = keep raw frontier clusters separate.
+    #
+    # frontier_cluster_merge_distance_m:
+    #   Small-scale merge distance for nearby frontier fragments.
+    #   This is NOT the region merge distance.
+    #
+    merge_nearby_frontier_clusters: true
+    frontier_cluster_merge_distance_m: 0.30
+
+
+    # =========================================================================
+    # 7. Candidate Safety / Filtering
+    # =========================================================================
+    #
+    # min_obstacle_clearance_m:
+    #   Required clearance around the candidate goal cell.
+    #   This is a hard validity filter, not a score.
+    #
+    # min_robot_distance_m:
+    #   Rejects frontier goals too close to the robot.
+    #
+    min_obstacle_clearance_m: 0.10
+    min_robot_distance_m: 0.75
+
+
+    # =========================================================================
+    # 8. Candidate Goal Generation
+    # =========================================================================
+    #
+    # goal_search_radius_m:
+    #   Around each frontier cluster centre, search this radius for a safe goal.
+    #
+    # max_goals_to_publish:
+    #   Maximum candidate goals generated per planning cycle.
+    #
+    # candidate_validity_radius_m:
+    #   Cached candidates remain valid if a frontier still exists within this
+    #   radius of the old goal cell.
+    #
+    goal_search_radius_m: 1.00
+    max_goals_to_publish: 50
+    candidate_validity_radius_m: 0.75
+
+
+    # =========================================================================
+    # 9. A* Path Planning / Reachability
+    # =========================================================================
+    #
+    # enable_path_planning:
+    #   true  = compute A* path to each candidate.
+    #   false = do not compute paths; most selection policies become less useful.
+    #
+    # path_obstacle_clearance_m:
+    #   Required clearance for the A* path.
+    #   This is a hard safety filter, not a score.
+    #
+    # require_reachable:
+    #   true  = reject frontier candidates that cannot be reached through free space.
+    #   false = allow unreachable candidates through.
+    #
+    enable_path_planning: true
+    allow_diagonal_motion: true
+    prevent_diagonal_corner_cutting: true
+    path_obstacle_clearance_m: 0.15
+    require_reachable: true
+
+
+    # =========================================================================
+    # 10. Planning Rate / Debug Output
+    # =========================================================================
+    #
+    # plan_every_n_maps:
+    #   Only run the expensive planning stage every N map callbacks unless a
+    #   replan is forced.
+    #
+    # min_plan_period_s:
+    #   Minimum time between planning cycles.
+    #
+    # publish_text_labels:
+    #   true  = show candidate/region score labels in RViz.
+    #   false = cleaner RViz display.
+    #
+    plan_every_n_maps: 3
+    min_plan_period_s: 0.75
+    publish_text_labels: true
+    publish_debug_every_n_maps: 10
+
+    # Region anchor clearance
+    #
+    # Controls clearance for the region anchor point only.
+    #
+    # The true region centroid is just a geometric/debug point and may be unsafe.
+    # The anchor is the nearest free/safe cell to that centroid.
+    #
+    # This does NOT change:
+    #   - candidate goal clearance
+    #   - A* path clearance
+    #   - frontier filtering
+    #
+    # Related parameters:
+    #   min_obstacle_clearance_m  = candidate goal clearance
+    #   path_obstacle_clearance_m = A* path clearance
+    #   region_anchor_clearance_m = region anchor clearance
+    region_anchor_clearance_m: 0.50
+
+
+    # =========================================================================
+    # 11. Selection Mode: Candidate-only vs Region-first
+    # =========================================================================
+    #
+    # selection_mode controls the high-level decision structure.
+    #
+    # candidates_only:
+    #   Score all candidate goals directly.
+    #   The selected candidate is the best candidate after hysteresis.
+    #   Best for clean baseline testing.
+    #
+    # regions_then_candidates:
+    #   First group candidates into regions.
+    #   Score/select a region.
+    #   Then select a candidate inside that selected region.
+    #   Best for your abstract graph / region hierarchy experiments.
+    #
+    # auto:
+    #   Uses regions_then_candidates if use_region_hierarchy is true,
+    #   otherwise candidates_only.
+    #
+    use_region_hierarchy: true
+    selection_mode: candidates_only
+
+
+    # =========================================================================
+    # 12. Candidate Selection Policy
+    # =========================================================================
+    #
+    # selection_policy controls how EACH CANDIDATE gets its score.
+    #
+    # All policies are lower-is-better.
+    #
+    # nearest:
+    #   score = path_length_m
+    #
+    #   Use as the simplest frontier baseline.
+    #
+    # utility:
+    #   score =
+    #       utility_distance_weight * path_length_m
+    #     - utility_gain_weight * unknown_gain_cells
+    #
+    #   This trades travel distance against expected unknown-cell gain.
+    #
+    # gain_rate:
+    #   score = path_length_m / max(unknown_gain_cells, 1)
+    #
+    #   Lower score means better information per metre.
+    #
+    # stable_utility:
+    #   score =
+    #       utility_distance_weight * path_length_m
+    #     - utility_gain_weight * unknown_gain_cells
+    #     - stability_weight * stability_cycles
+    #
+    #   Favours candidates that persist across planning cycles.
+    #
+    # density_utility:
+    #   score =
+    #       utility_distance_weight * path_length_m
+    #     - utility_gain_weight * unknown_gain_cells
+    #     - density_weight * information_density
+    #
+    #   Favours compact/high-density frontier clusters.
+    #
+    selection_policy: utility
+
+    utility_distance_weight: 1.0
+    utility_gain_weight: 0.020
+
+    stability_weight: 0.10
+    density_weight: 0.10
+    candidate_stability_match_radius_m: 0.75
+    max_candidate_stability_cycles: 20
+
+
+    # =========================================================================
+    # 13. Region Construction
+    # =========================================================================
+    #
+    # These parameters decide which candidate goals belong to the same region.
+    #
+    # use_path_distance_for_regions:
+    #   true:
+    #     Candidates are grouped only if connected through safe free-space path
+    #     distance below frontier_region_merge_path_distance_m.
+    #
+    #   false:
+    #     Candidates are grouped using simple Euclidean distance below
+    #     frontier_region_merge_distance_m.
+    #
+    # frontier_region_merge_path_distance_m:
+    #   Path-distance threshold for grouping candidates into the same region.
+    #
+    # frontier_region_merge_distance_m:
+    #   Euclidean fallback / previous-region matching threshold.
+    #   If use_path_distance_for_regions is true, this is not the main grouping
+    #   threshold, but it is still used in some matching/hysteresis logic.
+    #
+    # max_region_pair_checks:
+    #   Limits region-pair path checks for computation control.
+    #
+    use_path_distance_for_regions: true
+    frontier_region_merge_path_distance_m: 5.0
+    frontier_region_merge_distance_m: 5.0
+    max_region_pair_checks: 80
+
+
+    # =========================================================================
+    # 14. Region Scoring
+    # =========================================================================
+    #
+    # Region score is computed from the candidate scores inside each region.
+    #
+    # Lower region score is better.
+    #
+    # Current structure:
+    #
+    #   best_candidate_score = best candidate score in the region
+    #   mean_candidate_score = mean candidate score in the region
+    #
+    #   candidate_aggregate_score =
+    #       (1 - region_candidate_mean_weight) * best_candidate_score
+    #     +      region_candidate_mean_weight  * mean_candidate_score
+    #
+    #   region_score =
+    #       region_distance_weight * candidate_aggregate_score
+    #     - region_gain_weight * total_unknown_gain_cells
+    #     - region_candidate_count_weight * log(1 + candidate_count)
+    #     - region_density_weight * region_information_density
+    #     + optional region_switch_penalty
+    #
+    #
+    # region_candidate_mean_weight:
+    #   0.0 = region score follows the best candidate only.
+    #         Best for clean candidate-policy comparisons.
+    #
+    #   0.35 = compromise between best candidate and general region quality.
+    #          Good for smoother region behaviour.
+    #
+    #   1.0 = region score uses only mean candidate score.
+    #         Strongly favours regions where all candidates are good.
+    #
+    region_distance_weight: 1.0
+    region_candidate_mean_weight: 0.35
+
+    # region_gain_weight:
+    #   Adds a bonus for total gain across the whole region.
+    #
+    #   Important:
+    #   Set this to 0.0 when selection_policy already includes gain, such as:
+    #     utility
+    #     stable_utility
+    #     density_utility
+    #
+    #   Otherwise gain is counted once at candidate level and again at region level.
+    #
+    #   For nearest baseline experiments, a nonzero value can be tested because
+    #   nearest does not include gain at candidate level.
+    #
+    region_gain_weight: 0.0
+
+    # Extra experimental region bonuses.
+    # Keep both at 0.0 unless deliberately testing these effects.
+    #
+    # region_candidate_count_weight:
+    #   Favours regions containing more candidate goals.
+    #
+    # region_density_weight:
+    #   Favours regions with high unknown_gain / frontier_size.
+    #
+    region_candidate_count_weight: 0.0
+    region_density_weight: 0.0
+
+
+    # =========================================================================
+    # 15. Region Hysteresis / Switching Resistance
+    # =========================================================================
+    #
+    # These only matter when selection_mode: regions_then_candidates.
+    #
+    # region_switch_margin:
+    #   A new region must beat the previous active region by this margin before
+    #   switching.
+    #
+    # region_switch_penalty:
+    #   Adds this penalty to regions that are not the previous active region.
+    #
+    # Effects:
+    #   Increase to reduce region flickering.
+    #   Decrease to make the planner more responsive.
+    #
+    # For clean scoring comparisons, set both to 0.0.
+    #
+    region_switch_margin: 1.0
+    region_switch_penalty: 0.5
+
+
+    # =========================================================================
+    # 16. Candidate Hysteresis
+    # =========================================================================
+    #
+    # Candidate hysteresis prevents flickering between similar candidate goals.
+    #
+    # enable_goal_hysteresis:
+    #   true  = keep previous candidate unless a new one is better by margin.
+    #   false = always choose the current best candidate.
+    #
+    # hysteresis_goal_match_distance_m:
+    #   Previous candidate is considered the same target if a new candidate is
+    #   within this distance.
+    #
+    # hysteresis_switch_margin:
+    #   New candidate must beat previous candidate by this score margin.
+    #
+    # Note:
+    #   For nearest, this margin is approximately metres.
+    #   For utility/gain-rate policies, it is in policy score units.
+    #
+    # For clean candidate-policy comparisons, set:
+    #   enable_goal_hysteresis: false
+    #
+    enable_goal_hysteresis: false
+    hysteresis_goal_match_distance_m: 0.75
+    hysteresis_switch_margin: 0.75
+
+
+    # =========================================================================
+    # 17. Active Goal Manager
+    # =========================================================================
+    #
+    # This manages the committed goal after selection.
+    #
+    # It can keep publishing an older goal even if the latest raw scoring would
+    # choose something else. This is intentional for stable robot behaviour.
+    #
+    # For pure scoring tests, these persistence effects can hide the raw best
+    # candidate/region. Use the CSV logs to distinguish:
+    #   - raw candidate ranks
+    #   - selected candidate
+    #   - active goal status
+    #
+    # goal_reached_distance_m:
+    #   Active goal is considered reached within this distance.
+    #
+    # goal_timeout_s:
+    #   If enabled, active goal is abandoned after this time.
+    #
+    # minimum_goal_switch_improvement:
+    #   Active goal only switches if new candidate is better by this amount.
+    #
+    # active_goal_invalid_grace_cycles:
+    #   Number of planning cycles to tolerate temporary disappearance of active
+    #   goal before declaring it invalid.
+    #
+    goal_reached_distance_m: 0.35
+    goal_timeout_s: 90.0
+    goal_blacklist_radius_m: 0.50
+    goal_blacklist_duration_s: 20.0
+    minimum_goal_switch_improvement: 0.00
+    enable_goal_timeout: true
+    enable_goal_blacklist: true
+    active_goal_match_radius_m: 1.0
+    active_goal_invalid_grace_cycles: 5
+
+
+    # =========================================================================
+    # 18. RViz Marker Settings
+    # =========================================================================
+
+    marker_scale_m: 0.08

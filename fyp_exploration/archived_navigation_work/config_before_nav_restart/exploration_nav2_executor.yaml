@@ -1,0 +1,26 @@
+exploration_nav2_executor:
+  ros__parameters:
+    selected_goal_topic: "/selected_frontier_goal"
+    exploration_status_topic: "/exploration_status"
+    navigate_action_name: "/navigate_to_pose"
+
+    goal_replace_distance_m: 1.25
+    goal_timeout_s: 90.0
+
+    # Fallback only. Main completion behaviour now comes from /exploration_status.
+    selected_goal_stale_timeout_s: 5.0
+
+    wait_for_server_timeout_s: 5.0
+
+    ignore_goals_without_frame_id: true
+    required_goal_frame: "map"
+    enforce_required_goal_frame: true
+
+    cancel_on_terminal_status: true
+    terminal_status_values:
+      - "COMPLETE"
+      - "NO_REACHABLE_FRONTIERS"
+      - "EXPLORATION_COMPLETE"
+
+    active_status_values:
+      - "ACTIVE"
