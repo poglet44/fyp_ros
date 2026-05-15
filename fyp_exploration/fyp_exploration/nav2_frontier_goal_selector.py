@@ -40,6 +40,14 @@ class Nav2FrontierGoalSelector(Node):
         self.declare_parameter("abort_cooldown_s", 5.0)
         self.declare_parameter("wait_for_server_timeout_s", 5.0)
 
+        # Controlled active-goal updating.
+        # This allows the frontier detector to change its selected goal while
+        # Nav2 is already executing, but prevents cancel/resend spam from small
+        # frontier jitter.
+        self.declare_parameter("update_active_goal", True)
+        self.declare_parameter("update_distance_threshold_m", 0.75)
+        self.declare_parameter("min_update_interval_s", 5.0)
+
         self.selected_goal_topic = self.get_parameter("selected_goal_topic").value
         self.navigate_action_name = self.get_parameter("navigate_action_name").value
         self.required_goal_frame = self.get_parameter("required_goal_frame").value
@@ -54,12 +62,22 @@ class Nav2FrontierGoalSelector(Node):
             self.get_parameter("wait_for_server_timeout_s").value
         )
 
+        self.update_active_goal = bool(self.get_parameter("update_active_goal").value)
+        self.update_distance_threshold_m = float(
+            self.get_parameter("update_distance_threshold_m").value
+        )
+        self.min_update_interval_s = float(
+            self.get_parameter("min_update_interval_s").value
+        )
+
         self.nav_client = ActionClient(self, NavigateToPose, self.navigate_action_name)
 
         self.active_goal_handle = None
         self.active_goal_pose: Optional[PoseStamped] = None
         self.pending_goal: Optional[PoseStamped] = None
         self.last_abort_time: Optional[Time] = None
+        self.last_goal_sent_time: Optional[Time] = None
+        self.canceling_for_update = False
 
         self.create_subscription(
             PoseStamped,
@@ -93,7 +111,11 @@ class Nav2FrontierGoalSelector(Node):
             if self.same_position(msg, self.active_goal_pose):
                 return
 
-            # Baseline behaviour: do not replace active goals.
+            if not self.should_update_active_goal(msg):
+                return
+
+            self.pending_goal = msg
+            self.cancel_active_goal_for_update()
             return
 
         if self.pending_goal is not None and self.same_position(msg, self.pending_goal):
@@ -131,6 +153,7 @@ class Nav2FrontierGoalSelector(Node):
         goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
 
         self.active_goal_pose = goal_msg.pose
+        self.last_goal_sent_time = self.get_clock().now()
 
         self.get_logger().info(
             f"Sending frontier goal to Nav2: "
@@ -180,14 +203,65 @@ class Nav2FrontierGoalSelector(Node):
 
         self.clear_active_goal()
 
+    def should_update_active_goal(self, new_goal: PoseStamped) -> bool:
+        if not self.update_active_goal:
+            return False
+
+        if self.active_goal_pose is None:
+            return False
+
+        if self.canceling_for_update:
+            return False
+
+        distance_m = self.goal_distance(new_goal, self.active_goal_pose)
+
+        if distance_m < self.update_distance_threshold_m:
+            return False
+
+        now = self.get_clock().now()
+
+        if self.last_goal_sent_time is not None:
+            elapsed = now - self.last_goal_sent_time
+            if elapsed < Duration(seconds=self.min_update_interval_s):
+                return False
+
+        return True
+
+    def cancel_active_goal_for_update(self):
+        if self.active_goal_handle is None:
+            self.clear_active_goal()
+            return
+
+        self.canceling_for_update = True
+
+        self.get_logger().info(
+            "Selected frontier goal changed significantly. "
+            "Canceling active Nav2 goal for update."
+        )
+
+        future = self.active_goal_handle.cancel_goal_async()
+        future.add_done_callback(self.cancel_done_callback)
+
+    def cancel_done_callback(self, future):
+        try:
+            future.result()
+        except Exception as exc:
+            self.get_logger().error(f"Failed to cancel active Nav2 goal: {exc}")
+
+        self.clear_active_goal()
+        self.canceling_for_update = False
+
     def clear_active_goal(self):
         self.active_goal_handle = None
         self.active_goal_pose = None
 
-    def same_position(self, a: PoseStamped, b: PoseStamped) -> bool:
+    def goal_distance(self, a: PoseStamped, b: PoseStamped) -> float:
         dx = a.pose.position.x - b.pose.position.x
         dy = a.pose.position.y - b.pose.position.y
-        return math.hypot(dx, dy) <= self.duplicate_goal_tolerance_m
+        return math.hypot(dx, dy)
+
+    def same_position(self, a: PoseStamped, b: PoseStamped) -> bool:
+        return self.goal_distance(a, b) <= self.duplicate_goal_tolerance_m
 
 
 def main(args=None):

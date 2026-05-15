@@ -7,5 +7,9 @@ nav2_frontier_goal_selector:
     enforce_required_goal_frame: true
 
     duplicate_goal_tolerance_m: 0.25
-    abort_cooldown_s: 5.0
+    abort_cooldown_s: 1.25
     wait_for_server_timeout_s: 5.0
+
+    update_active_goal: true
+    update_distance_threshold_m: 0.75
+    min_update_interval_s: 5.0

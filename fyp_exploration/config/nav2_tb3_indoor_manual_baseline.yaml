@@ -128,11 +128,11 @@ controller_server:
 
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.12
+      max_vel_x: 0.22
       max_vel_y: 0.0
       max_vel_theta: 0.45
       min_speed_xy: 0.0
-      max_speed_xy: 0.12
+      max_speed_xy: 0.22
       min_speed_theta: 0.0
 
       acc_lim_x: 0.35
@@ -207,7 +207,7 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.25
+        inflation_radius: 0.15
         cost_scaling_factor: 6.0
 
       always_send_full_costmap: true
@@ -238,7 +238,7 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.30
+        inflation_radius: 0.25
         cost_scaling_factor: 6.0
 
       always_send_full_costmap: true
@@ -397,7 +397,7 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.12, 0.0, 0.45]
+    max_velocity: [0.22, 0.0, 0.45]
     min_velocity: [0.0, 0.0, -0.45]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
