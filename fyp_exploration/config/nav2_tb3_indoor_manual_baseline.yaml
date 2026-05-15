@@ -126,7 +126,7 @@ controller_server:
       plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: False
 
-      min_vel_x: 0.0
+      min_vel_x: -0.08
       min_vel_y: 0.0
       max_vel_x: 0.22
       max_vel_y: 0.0
@@ -398,7 +398,7 @@ velocity_smoother:
     scale_velocities: false
     feedback: "OPEN_LOOP"
     max_velocity: [0.22, 0.0, 0.45]
-    min_velocity: [0.0, 0.0, -0.45]
+    min_velocity: [-0.08, 0.0, -0.45]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
     max_accel: [0.35, 0.0, 0.8]
