@@ -157,7 +157,7 @@ frontier_detector:
     enable_path_planning: true
     allow_diagonal_motion: true
     prevent_diagonal_corner_cutting: true
-    path_obstacle_clearance_m: 0.15
+    path_obstacle_clearance_m: 0.10
     require_reachable: true
 
 
@@ -457,7 +457,7 @@ frontier_detector:
     #   goal before declaring it invalid.
     #
     goal_reached_distance_m: 0.35
-    goal_timeout_s: 90.0
+    goal_timeout_s: 120.0
     goal_blacklist_radius_m: 0.50
     goal_blacklist_duration_s: 20.0
     minimum_goal_switch_improvement: 0.00
