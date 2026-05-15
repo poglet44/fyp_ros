@@ -33,6 +33,7 @@ setup(
         'console_scripts': [
             'frontier_detector = fyp_exploration.frontier_detector:main',
             'exploration_status_monitor = fyp_exploration.exploration_status_monitor:main',
+            'nav2_frontier_goal_selector = fyp_exploration.nav2_frontier_goal_selector:main',
         ],
     },
 )

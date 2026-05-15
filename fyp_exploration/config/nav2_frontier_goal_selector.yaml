@@ -1,0 +1,11 @@
+nav2_frontier_goal_selector:
+  ros__parameters:
+    selected_goal_topic: "/selected_frontier_goal"
+    navigate_action_name: "/navigate_to_pose"
+
+    required_goal_frame: "map"
+    enforce_required_goal_frame: true
+
+    duplicate_goal_tolerance_m: 0.25
+    abort_cooldown_s: 5.0
+    wait_for_server_timeout_s: 5.0
