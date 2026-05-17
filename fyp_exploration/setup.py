@@ -35,6 +35,7 @@ setup(
             'exploration_status_monitor = fyp_exploration.exploration_status_monitor:main',
             'nav2_frontier_goal_selector = fyp_exploration.nav2_frontier_goal_selector:main',
             'exploration_experiment_logger = fyp_exploration.exploration_experiment_logger:main',
+            'experiment_bag_recorder = fyp_exploration.experiment_bag_recorder:main',
         ],
     },
 )
