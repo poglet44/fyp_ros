@@ -1,0 +1,64 @@
+exploration_experiment_logger:
+  ros__parameters:
+
+    # =========================================================================
+    # Topics / frames
+    # =========================================================================
+    map_topic: /exploration_grid
+    selected_goal_topic: /selected_frontier_goal
+
+    # ROS 2 Gazebo default:
+    robot_frame: base_footprint
+
+    # For Spot/ROS1 equivalent later, use:
+    # robot_frame: body
+
+    map_frame: map
+
+    # =========================================================================
+    # Run metadata
+    # =========================================================================
+    log_root_dir: ~/Sam/fyp_ws/logs
+
+    # Write into the newest active frontier_detector run_* folder.
+    # This keeps all experiment CSVs in the same run directory.
+    use_latest_detector_run_dir: true
+    detector_run_dir_wait_timeout_s: 10.0
+    detector_run_dir_max_age_s: 60.0
+
+    # Leave blank for automatic timestamped ID.
+    run_id: ""
+
+    platform: ros2_sim
+    algorithm_name: utility_frontier
+    environment_name: gazebo_test_map
+
+    notes: ""
+    manual_intervention: false
+    run_valid: true
+
+    # =========================================================================
+    # Logging rate
+    # =========================================================================
+    log_period_s: 1.0
+
+    # =========================================================================
+    # Goal interpretation
+    # =========================================================================
+    goal_match_tolerance_m: 0.25
+    goal_reached_distance_m: 0.35
+    goal_timeout_s: 120.0
+
+    # A timeout only counts as an estimated failed goal if the robot actually
+    # travelled at least this far while the goal was active.
+    minimum_attempt_distance_m: 0.50
+
+    # =========================================================================
+    # OccupancyGrid interpretation
+    # =========================================================================
+    unknown_value: -1
+    free_max_value: 0
+    occupied_min_value: 50
+
+    # Used only to label the run summary completion_reason.
+    completion_unknown_fraction_threshold: 0.02
