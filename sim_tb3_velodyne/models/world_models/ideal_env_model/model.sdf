@@ -1,0 +1,229 @@
+
+<!-- model.sdf is the version which is actually run. Not version 1.4 ~(model-1_4.sdf) -->
+<!-- This is because of how its set in the .world file -->
+
+<!-- ### you can describe robots, models or even entire environments of robotic simulations using sdf.
+# A URDF is restricted to creating a single robot. -->
+
+
+<!-- ### sdf tag, everthing (our model) will be contained within -->
+<sdf version='1.5'>
+   
+
+<!-- ### defining a model. We will only have 1 model within this sdf file. The model element defines a complete robot or any other physical object. -->
+
+<!-- ### name used ot be: 'ros_symbol' -->
+    <model name='ideal_env_model'>
+
+
+<!-- ### static: If set to true (1), the model is immovable; i.e., a dynamics engine will not update its position. This will also overwrite this model's `@canonical_link` and instead attach the model's implicit frame to the world's implicit frame. This holds even if this model is nested (or included) by another model instead of being a direct child of `//world`. -->
+      <static>1</static> 
+
+
+<!-- ###link: A physical link with inertia, collision, and visual properties. A link must be a child of a model, and any number of links may exist in a model. In this case only one link in the file.
+# name below used to be 'symbol'. --> 
+      <link name='Environment'>
+
+
+
+
+
+<!-- ### Now we have to define 'collision' and 'visual' parts
+# collision:
+#The collison is used to do the maths of the dynamics of the environment, e.g when a robot and environment collide. -->
+
+      <collision name='OriginalObstacles'>
+<!--- the pose will be x=0 y =0 and z=0 (as well as rotations =0). The DAE files contain the parts relative to the frame/cord system that was used in cad. Therefore by setting x=0 y=0 z=0, we are placing the CAD frame cord system at the same place as the one gazebo uses, thus all parts will be in their exact positions and still relative to the cord system we used in cad as we made sure the gazebo cord/frame system concides with the cad cord system -->
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/OriginalObstacles.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+<!--visual: -->
+        <visual name='OriginalObstacles'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/OriginalObstacles.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/White</name>
+            </script>
+          </material>
+        </visual>
+
+
+      <collision name='NewObstaclesShorter'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/NewObstaclesShorter.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+<!--visual: -->
+        <visual name='NewObstaclesShorter'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/NewObstaclesShorter.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/White</name>
+            </script>
+          </material>
+        </visual>
+
+
+
+      <collision name='NewObstaclesTaller'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/NewObstaclesTaller.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+<!--visual: -->
+        <visual name='NewObstaclesTaller'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/NewObstaclesTaller.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/White</name>
+            </script>
+          </material>
+        </visual>
+
+
+
+      <collision name='Walls'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/Walls.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+<!--visual: -->
+        <visual name='Walls'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/Walls.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/White</name>
+            </script>
+          </material>
+        </visual>
+
+
+      <collision name='Outlet'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/Outlet.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision> 
+<!--visual: -->
+        <visual name='Outlet'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://ideal_env_model/meshes/Outlet.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/White</name>
+            </script>
+          </material>
+        </visual>
+
+
+
+
+
+       
+    </link>
+  </model>
+</sdf>

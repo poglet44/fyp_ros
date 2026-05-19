@@ -1,0 +1,85 @@
+<sdf version='1.4'>
+<!-- # BASICALLY a copy of model.sdf. BUT FOR sdf version 1.4. ITS NOT USING THIS ONE -->
+    <model name='my2ndmodel'>
+      <static>1</static>
+      <link name='Environment'>>
+      <collision name='Obstacles'>
+<!--- the pose will be x=0 y =0 and z=0 (as well as rotations =0). The DAE files contain the parts relative to the frame/cord system that was used in cad. Therefore by setting x=0 y=0 z=0, we are placing the CAD frame cord system at the same place as the one gazebo uses, thus all parts will be in their exact positions and still relative to the cord system we used in cad as we made sure the gazebo cord/frame system concides with the cad cord system -->
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://my2ndmodel/meshes/Obstacles.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+<!--visual: -->
+        <visual name='Obstacles'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://my2ndmodel/meshes/Obstacles.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/White</name>
+            </script>
+          </material>
+        </visual>
+
+
+        <collision name='Walls'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://my2ndmodel/meshes/Walls.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <max_contacts>10</max_contacts>
+          <surface>
+            <bounce/>
+            <friction>
+              <ode/>
+            </friction>
+            <contact>
+              <ode/>
+            </contact>
+          </surface>
+        </collision>
+
+        <visual name='Walls'>
+          <pose>0 0 0 0 0 0</pose>
+          <geometry>
+           <mesh>
+            <uri>model://my2ndmodel/meshes/Walls.dae</uri>
+            <scale>1.0 1.0 1.0</scale>
+           </mesh>
+          </geometry>
+          <material>
+            <script>
+              <uri>file://media/materials/scripts/gazebo.material</uri>
+              <name>Gazebo/White</name>
+            </script>
+          </material>
+        </visual>
+
+
+
+       
+    </link>
+  </model>
+</sdf>

@@ -50,5 +50,29 @@
       </include>
     </model>
 
-  </world>
+  
+    <model name="doorway_blocker_1">
+      <static>true</static>
+      <pose>1.214782 -0.170725 0.6 0 0 0</pose>
+
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>1.20 0.20 1.20</size>
+            </box>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>1.20 0.20 1.20</size>
+            </box>
+          </geometry>
+        </visual>
+      </link>
+    </model>
+
+</world>
 </sdf>

@@ -24,5 +24,29 @@
       <uri>model://demo_cube</uri>
       <pose>3.8 3.15 0.83 0 0 0</pose>
     </include>
-  </world>
+  
+    <model name="doorway_blocker_1">
+      <static>true</static>
+      <pose>7.178520 -6.118640 0.75 0 0 1.5708</pose>
+
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>1.20 0.20 1.50</size>
+            </box>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>1.20 0.20 1.50</size>
+            </box>
+          </geometry>
+        </visual>
+      </link>
+    </model>
+
+</world>
 </sdf>
