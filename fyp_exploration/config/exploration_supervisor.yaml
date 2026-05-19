@@ -1,0 +1,35 @@
+exploration_supervisor:
+  ros__parameters:
+    detector_status_topic: /frontier_detector/status
+    supervisor_status_topic: /exploration_supervisor/status
+    recovery_state_topic: /exploration_supervisor/recovery_state
+    recovery_target_goal_topic: /exploration_supervisor/recovery_target_goal
+
+    # This topic does not exist yet in ROS2.
+    # It will become useful after we add an arbiter/Nav2 status layer.
+    executor_status_topic: /nav2_frontier_goal_selector/status
+
+    map_frame: map
+    robot_frame: base_footprint
+    tf_lookup_timeout_s: 0.20
+
+    no_candidates_grace_cycles: 3
+
+    # Keep this enabled so the ROS2 supervisor behaves like the ROS1 setup.
+    recovery_mode: return_to_checkpoint
+    publish_recovery_target: true
+
+    local_recheck_cycles: 5
+
+    checkpoint_min_candidates: 2
+    checkpoint_min_spacing_m: 1.5
+    max_checkpoints: 20
+    recovery_progress_fractions: [0.75, 0.50, 0.25]
+    checkpoint_min_return_distance_m: 1.0
+
+    executor_goal_reached_reason: goal_reached
+    recovery_target_switch_grace_s: 3.0
+    active_target_match_tolerance_m: 0.75
+    active_target_goal_reached_tolerance_m: 0.75
+
+    min_progress_update_distance_m: 0.03

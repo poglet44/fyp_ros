@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import csv
+import json
 import heapq
 import math
 import re
@@ -19,6 +20,7 @@ from rclpy.node import Node
 
 from geometry_msgs.msg import Point, Pose, PoseArray, PoseStamped, Quaternion
 from nav_msgs.msg import OccupancyGrid, Path
+from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
 import tf2_ros
@@ -87,6 +89,7 @@ class FrontierDetector(Node):
         self.declare_parameter("frontier_goals_topic", "/frontier_goals")
         self.declare_parameter("selected_goal_topic", "/selected_frontier_goal")
         self.declare_parameter("frontier_path_topic", "/frontier_path")
+        self.declare_parameter("frontier_detector_status_topic", "/frontier_detector/status")
 
         # Frames
         self.declare_parameter("robot_frame", "body")
@@ -192,6 +195,9 @@ class FrontierDetector(Node):
         self.frontier_goals_topic = self.get_parameter("frontier_goals_topic").value
         self.selected_goal_topic = self.get_parameter("selected_goal_topic").value
         self.frontier_path_topic = self.get_parameter("frontier_path_topic").value
+        self.frontier_detector_status_topic = self.get_parameter(
+            "frontier_detector_status_topic"
+        ).value
         self.frontier_regions_markers_topic = self.get_parameter(
             "frontier_regions_markers_topic"
         ).value
@@ -335,6 +341,11 @@ class FrontierDetector(Node):
         self.goal_pub = self.create_publisher(PoseArray, self.frontier_goals_topic, 10)
         self.selected_goal_pub = self.create_publisher(PoseStamped, self.selected_goal_topic, 10)
         self.path_pub = self.create_publisher(Path, self.frontier_path_topic, 10)
+        self.status_pub = self.create_publisher(
+            String,
+            self.frontier_detector_status_topic,
+            10,
+        )
         self.region_marker_pub = self.create_publisher(
             MarkerArray,
             self.frontier_regions_markers_topic,
@@ -722,6 +733,17 @@ class FrontierDetector(Node):
                 f"cached_candidates={len(self.cached_candidates)}"
             )
 
+        self.publish_detector_status(
+            msg=msg,
+            planning_ran=planning_ran,
+            raw_frontiers=raw_frontiers,
+            filtered_frontiers=filtered_frontiers,
+            robot_cell=robot_cell,
+            robot_x=robot_x,
+            robot_y=robot_y,
+            robot_yaw=robot_yaw,
+        )
+
     def should_run_planning(self) -> bool:
         if not self.has_planned_once:
             return True
@@ -756,6 +778,150 @@ class FrontierDetector(Node):
             'Falling back to "candidates_only".'
         )
         return "candidates_only"
+
+
+    def publish_detector_status(
+        self,
+        msg: OccupancyGrid,
+        planning_ran: bool,
+        raw_frontiers: Set[Cell],
+        filtered_frontiers: Set[Cell],
+        robot_cell: Optional[Cell],
+        robot_x: Optional[float],
+        robot_y: Optional[float],
+        robot_yaw: Optional[float],
+    ) -> None:
+        selected = self.cached_selected_candidate
+
+        selected_goal_available = selected is not None
+        active_goal_available = self.active_goal_cell is not None
+
+        selected_goal_x = None
+        selected_goal_y = None
+        selected_goal_cell_x = None
+        selected_goal_cell_y = None
+        selected_path_length_m = None
+        selected_score = None
+        selected_region_id = None
+
+        if selected is not None:
+            selected_goal_x = selected.goal_pose.position.x
+            selected_goal_y = selected.goal_pose.position.y
+            selected_goal_cell_x = selected.goal_cell[0]
+            selected_goal_cell_y = selected.goal_cell[1]
+            selected_path_length_m = selected.path_length_m
+            selected_score = selected.score
+            selected_region_id = selected.region_id
+
+        active_goal_cell_x = None
+        active_goal_cell_y = None
+        active_goal_x = None
+        active_goal_y = None
+        active_goal_age_s = None
+
+        if self.active_goal_cell is not None:
+            active_goal_cell_x = self.active_goal_cell[0]
+            active_goal_cell_y = self.active_goal_cell[1]
+            active_goal_x, active_goal_y = self.cell_to_world(
+                msg,
+                self.active_goal_cell[0],
+                self.active_goal_cell[1],
+            )
+
+            if self.active_goal_started_at_s is not None:
+                active_goal_age_s = self.now_seconds() - self.active_goal_started_at_s
+
+        status = {
+            "stamp_sec": msg.header.stamp.sec,
+            "stamp_nanosec": msg.header.stamp.nanosec,
+            "ros_time_ns": self.get_clock().now().nanoseconds,
+
+            "map_count": self.map_count,
+            "map_frame": msg.header.frame_id,
+            "width_cells": msg.info.width,
+            "height_cells": msg.info.height,
+            "resolution_m": msg.info.resolution,
+
+            "planning_ran": bool(planning_ran),
+            "planner_status": self.current_planner_status,
+            "last_replan_reason": self.last_replan_reason,
+            "has_planned_once": bool(self.has_planned_once),
+
+            "raw_frontier_cells": len(raw_frontiers),
+            "filtered_frontier_cells": len(filtered_frontiers),
+            "num_frontier_clusters": self.cached_num_clusters,
+            "num_candidate_goals": len(self.cached_candidates),
+            "num_frontier_regions": len(self.cached_frontier_regions),
+
+            "clusters_total": self.last_candidate_rejection_counts["clusters_total"],
+            "clusters_not_evaluated_due_limit": self.last_candidate_rejection_counts[
+                "clusters_not_evaluated_due_limit"
+            ],
+            "clusters_no_safe_or_reachable_goal": self.last_candidate_rejection_counts[
+                "clusters_no_safe_or_reachable_goal"
+            ],
+            "clusters_no_path": self.last_candidate_rejection_counts["clusters_no_path"],
+            "clusters_accepted": self.last_candidate_rejection_counts["clusters_accepted"],
+
+            "selected_goal_available": selected_goal_available,
+            "selected_goal_x": selected_goal_x,
+            "selected_goal_y": selected_goal_y,
+            "selected_goal_cell_x": selected_goal_cell_x,
+            "selected_goal_cell_y": selected_goal_cell_y,
+            "selected_path_length_m": selected_path_length_m,
+            "selected_score": selected_score,
+            "selected_region_id": selected_region_id,
+
+            "active_goal_available": active_goal_available,
+            "active_goal_cell_x": active_goal_cell_x,
+            "active_goal_cell_y": active_goal_cell_y,
+            "active_goal_x": active_goal_x,
+            "active_goal_y": active_goal_y,
+            "active_goal_age_s": active_goal_age_s,
+            "active_goal_region_id": self.active_goal_region_id,
+            "active_goal_score": (
+                self.active_goal_score
+                if math.isfinite(self.active_goal_score)
+                else None
+            ),
+
+            "goal_reached": bool(self.current_goal_reached),
+            "goal_invalid": bool(self.current_goal_invalid),
+            "goal_timed_out": bool(self.current_goal_timed_out),
+            "goal_switched": bool(self.current_goal_switched),
+
+            "blacklist_count": len(self.blacklisted_goals),
+
+            "robot_pose_available": robot_cell is not None,
+            "robot_cell_x": robot_cell[0] if robot_cell is not None else None,
+            "robot_cell_y": robot_cell[1] if robot_cell is not None else None,
+            "robot_x": robot_x,
+            "robot_y": robot_y,
+            "robot_yaw": robot_yaw,
+
+            "selection_policy": self.selection_policy,
+            "selection_mode": self.selection_mode,
+            "require_reachable": bool(self.require_reachable),
+            "enable_path_planning": bool(self.enable_path_planning),
+            "enable_goal_timeout": bool(self.enable_goal_timeout),
+            "enable_goal_blacklist": bool(self.enable_goal_blacklist),
+
+            "callback_total_time_ms": self.current_callback_total_time_ms,
+            "planning_time_ms": self.current_planning_time_ms,
+
+            "topics": {
+                "map_topic": self.map_topic,
+                "frontier_goals_topic": self.frontier_goals_topic,
+                "selected_goal_topic": self.selected_goal_topic,
+                "frontier_path_topic": self.frontier_path_topic,
+                "frontier_detector_status_topic": self.frontier_detector_status_topic,
+            },
+        }
+
+        msg_out = String()
+        msg_out.data = json.dumps(status, sort_keys=True)
+        self.status_pub.publish(msg_out)
+
 
     # -------------------------------------------------------------------------
     # CSV logging

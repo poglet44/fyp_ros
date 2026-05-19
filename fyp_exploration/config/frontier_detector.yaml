@@ -266,7 +266,7 @@ frontier_detector:
     #
     #   Favours compact/high-density frontier clusters.
     #
-    selection_policy: utility
+    selection_policy: nearest
 
     utility_distance_weight: 1.0
     utility_gain_weight: 0.020

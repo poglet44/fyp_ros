@@ -1,28 +1,12 @@
 experiment_bag_recorder:
   ros__parameters:
-
-    # Same root used by frontier_detector and experiment logger.
     log_root_dir: ~/Sam/fyp_ws/logs
-
-    # Write into newest active frontier_detector run_* directory.
     use_latest_detector_run_dir: true
-    detector_run_dir_wait_timeout_s: 10.0
-    detector_run_dir_max_age_s: 60.0
 
-    # The final bag path becomes:
-    #   <latest_detector_run_dir>/bag/
-    bag_dir_name: bag
-
-    # ROS 2 default storage backend.
-    storage_id: sqlite3
-
-    # Cross-platform experiment topics.
-    # Avoid Nav2-only topics.
     topics:
       - /tf
       - /tf_static
       - /odom
-
       - /exploration_grid
       - /projected_map
       - /occupied_cells_vis_array
@@ -33,5 +17,16 @@ experiment_bag_recorder:
       - /frontier_cells
       - /frontier_markers
       - /frontier_regions_markers
+      - /frontier_detector/status
+
+      - /exploration_supervisor/status
+      - /exploration_supervisor/recovery_state
+      - /exploration_supervisor/recovery_target_goal
+
+      - /exploration_goal_arbiter/status
+      - /nav2_frontier_goal_selector/status
+      - /selected_exploration_goal
+      - /selected_exploration_path
+      - /selected_exploration_mode
 
       - /mapPath

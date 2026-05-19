@@ -5,7 +5,7 @@ exploration_experiment_logger:
     # Topics / frames
     # =========================================================================
     map_topic: /exploration_grid
-    selected_goal_topic: /selected_frontier_goal
+    selected_goal_topic: /selected_exploration_goal
 
     # ROS 2 Gazebo default:
     robot_frame: base_footprint

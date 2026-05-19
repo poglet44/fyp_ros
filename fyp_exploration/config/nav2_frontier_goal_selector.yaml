@@ -1,7 +1,12 @@
 nav2_frontier_goal_selector:
   ros__parameters:
-    selected_goal_topic: "/selected_frontier_goal"
+    selected_goal_topic: "/selected_exploration_goal"
     navigate_action_name: "/navigate_to_pose"
+    status_topic: "/nav2_frontier_goal_selector/status"
+    map_frame: "map"
+    robot_frame: "base_footprint"
+    tf_lookup_timeout_s: 0.20
+    goal_reached_distance_tolerance_m: 0.75
 
     required_goal_frame: "map"
     enforce_required_goal_frame: true

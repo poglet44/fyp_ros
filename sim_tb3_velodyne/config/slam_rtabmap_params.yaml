@@ -1,5 +1,5 @@
 qos: 2
-wait_for_transform: 0.01
+wait_for_transform: 0.10
 
 subscribe_depth: false
 subscribe_rgb: false
@@ -28,15 +28,15 @@ Icp/VoxelSize: "0.05"
 Icp/Epsilon: "0.001"
 Icp/PointToPlaneK: "20"
 Icp/PointToPlaneRadius: "0"
-Icp/MaxTranslation: "0.2"
-Icp/MaxRotation: "0.50"
-Icp/MaxCorrespondenceDistance: "0.30"
+Icp/MaxTranslation: "0.12"
+Icp/MaxRotation: "0.35"
+Icp/MaxCorrespondenceDistance: "0.20"
 Icp/Strategy: "1"
 Icp/OutlierRatio: "0.85"
-Icp/CorrespondenceRatio: "0.3"
+Icp/CorrespondenceRatio: "0.40"
 Icp/Force4DoF: "true"
 
-Rtabmap/DetectionRate: "15.0"
+Rtabmap/DetectionRate: "8.0"
 
 Grid/Sensor: "0"
 Grid/RangeMin: "0.50"
