@@ -133,7 +133,7 @@ frontier_detector:
     #   Cached candidates remain valid if a frontier still exists within this
     #   radius of the old goal cell.
     #
-    goal_search_radius_m: 1.00
+    goal_search_radius_m: 1.20
     max_goals_to_publish: 50
     candidate_validity_radius_m: 0.75
 
@@ -266,10 +266,10 @@ frontier_detector:
     #
     #   Favours compact/high-density frontier clusters.
     #
-    selection_policy: nearest
+    selection_policy: utility
 
     utility_distance_weight: 1.0
-    utility_gain_weight: 0.020
+    utility_gain_weight: 0.050
 
     stability_weight: 0.10
     density_weight: 0.10
@@ -456,8 +456,8 @@ frontier_detector:
     #   Number of planning cycles to tolerate temporary disappearance of active
     #   goal before declaring it invalid.
     #
-    goal_reached_distance_m: 0.35
-    goal_timeout_s: 120.0
+    goal_reached_distance_m: 0.75
+    goal_timeout_s: 90.0
     goal_blacklist_radius_m: 0.50
     goal_blacklist_duration_s: 20.0
     minimum_goal_switch_improvement: 0.00
