@@ -32,6 +32,7 @@ setup(
     entry_points={
         'console_scripts': [
             'frontier_detector = fyp_exploration.frontier_detector:main',
+            'frontier_candidate_selector = fyp_exploration.frontier_candidate_selector:main',
             'exploration_status_monitor = fyp_exploration.exploration_status_monitor:main',
             'exploration_supervisor = fyp_exploration.exploration_supervisor:main',
             'exploration_goal_arbiter = fyp_exploration.exploration_goal_arbiter:main',

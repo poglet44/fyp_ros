@@ -90,6 +90,7 @@ class FrontierDetector(Node):
         self.declare_parameter("selected_goal_topic", "/selected_frontier_goal")
         self.declare_parameter("frontier_path_topic", "/frontier_path")
         self.declare_parameter("frontier_detector_status_topic", "/frontier_detector/status")
+        self.declare_parameter("frontier_candidates_topic", "/frontier_candidates")
 
         # Frames
         self.declare_parameter("robot_frame", "body")
@@ -197,6 +198,9 @@ class FrontierDetector(Node):
         self.frontier_path_topic = self.get_parameter("frontier_path_topic").value
         self.frontier_detector_status_topic = self.get_parameter(
             "frontier_detector_status_topic"
+        ).value
+        self.frontier_candidates_topic = self.get_parameter(
+            "frontier_candidates_topic"
         ).value
         self.frontier_regions_markers_topic = self.get_parameter(
             "frontier_regions_markers_topic"
@@ -344,6 +348,11 @@ class FrontierDetector(Node):
         self.status_pub = self.create_publisher(
             String,
             self.frontier_detector_status_topic,
+            10,
+        )
+        self.candidate_pub = self.create_publisher(
+            String,
+            self.frontier_candidates_topic,
             10,
         )
         self.region_marker_pub = self.create_publisher(
@@ -686,6 +695,13 @@ class FrontierDetector(Node):
         )
 
         self.publish_goals(msg, [candidate.goal_pose for candidate in self.cached_candidates])
+        self.publish_frontier_candidates(
+            msg=msg,
+            candidates=self.cached_candidates,
+            robot_x=robot_x,
+            robot_y=robot_y,
+            robot_yaw=robot_yaw,
+        )
         self.publish_selected_goal(msg, selected_goal_pose)
         self.publish_path(msg, self.cached_selected_path_cells)
         self.publish_markers(
@@ -3547,6 +3563,259 @@ class FrontierDetector(Node):
     # -------------------------------------------------------------------------
     # Publishers
     # -------------------------------------------------------------------------
+
+    def publish_frontier_candidates(
+        self,
+        msg: OccupancyGrid,
+        candidates: List[FrontierCandidate],
+        robot_x: Optional[float],
+        robot_y: Optional[float],
+        robot_yaw: Optional[float],
+    ) -> None:
+        """
+        Publish the current frontier candidate set as JSON for external selectors.
+
+        This topic is intended for RL / learned candidate selection.
+        It exposes physical and normalised candidate descriptors only.
+        It does not change the detector's internal nearest/utility selection.
+        """
+        cell_area_m2 = msg.info.resolution * msg.info.resolution
+
+        selected_cell = None
+        if self.cached_selected_candidate is not None:
+            selected_cell = self.cached_selected_candidate.goal_cell
+
+        candidate_records = []
+
+        # First pass: compute physical, non-normalised values.
+        for i, candidate in enumerate(candidates):
+            goal_x = float(candidate.goal_pose.position.x)
+            goal_y = float(candidate.goal_pose.position.y)
+            goal_yaw = float(self.pose_yaw(candidate.goal_pose))
+
+            euclidean_distance_m = None
+            bearing_to_goal_rad = None
+            heading_error_to_goal_rad = None
+
+            if robot_x is not None and robot_y is not None:
+                dx = goal_x - robot_x
+                dy = goal_y - robot_y
+                euclidean_distance_m = math.hypot(dx, dy)
+                bearing_to_goal_rad = math.atan2(dy, dx)
+
+                if robot_yaw is not None:
+                    heading_error_to_goal_rad = self.angle_diff(
+                        bearing_to_goal_rad,
+                        robot_yaw,
+                    )
+
+            path_to_euclidean_ratio = None
+            if (
+                euclidean_distance_m is not None
+                and euclidean_distance_m > 1.0e-9
+                and math.isfinite(candidate.path_length_m)
+            ):
+                path_to_euclidean_ratio = candidate.path_length_m / euclidean_distance_m
+
+            frontier_length_m = float(candidate.cluster_size_cells) * msg.info.resolution
+
+            local_unknown_neighbor_area_m2 = (
+                float(candidate.unknown_gain_cells) * cell_area_m2
+            )
+
+            local_unknown_area_per_path_m = None
+            if math.isfinite(candidate.path_length_m) and candidate.path_length_m > 1.0e-9:
+                local_unknown_area_per_path_m = (
+                    local_unknown_neighbor_area_m2 / candidate.path_length_m
+                )
+
+            path_poses = []
+            for path_x, path_y in candidate.path_cells:
+                wx, wy = self.cell_to_world(msg, path_x, path_y)
+                path_poses.append({
+                    "x": float(wx),
+                    "y": float(wy),
+                    "z": 0.05,
+                })
+
+            record = {
+                "candidate_index": i,
+                "cluster_id": int(candidate.cluster_id),
+                "region_id": int(candidate.region_id),
+
+                # Goal pose is included for execution/debugging, but should not be
+                # used as an absolute-coordinate RL feature.
+                "goal_x": goal_x,
+                "goal_y": goal_y,
+                "goal_yaw": goal_yaw,
+                "goal_cell_x": int(candidate.goal_cell[0]),
+                "goal_cell_y": int(candidate.goal_cell[1]),
+
+                # Physical candidate descriptors.
+                "path_length_m": (
+                    float(candidate.path_length_m)
+                    if math.isfinite(candidate.path_length_m)
+                    else None
+                ),
+                "euclidean_distance_m": euclidean_distance_m,
+                "path_to_euclidean_ratio": path_to_euclidean_ratio,
+                "frontier_length_m": frontier_length_m,
+
+                # This is local unknown adjacency around the frontier, not total
+                # map unknown area and not guaranteed future reward.
+                "local_unknown_neighbor_cells": int(candidate.unknown_gain_cells),
+                "local_unknown_neighbor_area_m2": local_unknown_neighbor_area_m2,
+                "local_unknown_area_per_path_m": local_unknown_area_per_path_m,
+                "local_information_density": float(candidate.information_density),
+
+                # Angle features.
+                "bearing_to_goal_rad": bearing_to_goal_rad,
+                "heading_error_to_goal_rad": heading_error_to_goal_rad,
+                "bearing_to_goal_sin": (
+                    math.sin(bearing_to_goal_rad)
+                    if bearing_to_goal_rad is not None
+                    else None
+                ),
+                "bearing_to_goal_cos": (
+                    math.cos(bearing_to_goal_rad)
+                    if bearing_to_goal_rad is not None
+                    else None
+                ),
+                "heading_error_sin": (
+                    math.sin(heading_error_to_goal_rad)
+                    if heading_error_to_goal_rad is not None
+                    else None
+                ),
+                "heading_error_cos": (
+                    math.cos(heading_error_to_goal_rad)
+                    if heading_error_to_goal_rad is not None
+                    else None
+                ),
+
+                # Stability.
+                "stability_cycles": int(candidate.stability_cycles),
+                "stability_cycles_norm": (
+                    float(candidate.stability_cycles)
+                    / float(max(self.max_candidate_stability_cycles, 1))
+                ),
+
+                # Candidate path corresponding to this candidate.
+                # This prevents external selectors from using a goal from one
+                # candidate and a path from the detector's internally selected
+                # candidate.
+                "path_pose_count": len(path_poses),
+                "path_poses": path_poses,
+
+                # Current detector state/debug.
+                "score_current_policy": (
+                    float(candidate.score)
+                    if math.isfinite(candidate.score)
+                    else None
+                ),
+                "is_selected_by_current_policy": (
+                    selected_cell is not None
+                    and candidate.goal_cell == selected_cell
+                ),
+
+                # Internal values retained for logging/debug, not preferred RL input.
+                "raw_cluster_size_cells": int(candidate.cluster_size_cells),
+            }
+
+            candidate_records.append(record)
+
+        def max_positive(key: str) -> float:
+            values = [
+                record[key]
+                for record in candidate_records
+                if record.get(key) is not None and record[key] > 0.0
+            ]
+            return max(values) if values else 1.0
+
+        max_path = max_positive("path_length_m")
+        max_euclidean = max_positive("euclidean_distance_m")
+        max_frontier_length = max_positive("frontier_length_m")
+        max_local_unknown_area = max_positive("local_unknown_neighbor_area_m2")
+        max_local_unknown_per_path = max_positive("local_unknown_area_per_path_m")
+        max_density = max_positive("local_information_density")
+
+        # Second pass: add per-candidate-set normalised features.
+        for record in candidate_records:
+            path_length_m = record["path_length_m"]
+            euclidean_distance_m = record["euclidean_distance_m"]
+            path_to_euclidean_ratio = record["path_to_euclidean_ratio"]
+            frontier_length_m = record["frontier_length_m"]
+            local_unknown_area_m2 = record["local_unknown_neighbor_area_m2"]
+            local_unknown_per_path = record["local_unknown_area_per_path_m"]
+            density = record["local_information_density"]
+
+            record["path_length_norm"] = (
+                path_length_m / max_path
+                if path_length_m is not None
+                else None
+            )
+            record["euclidean_distance_norm"] = (
+                euclidean_distance_m / max_euclidean
+                if euclidean_distance_m is not None
+                else None
+            )
+            record["path_to_euclidean_ratio_norm"] = (
+                min(path_to_euclidean_ratio, 5.0) / 5.0
+                if path_to_euclidean_ratio is not None
+                else None
+            )
+            record["frontier_length_norm"] = frontier_length_m / max_frontier_length
+            record["local_unknown_neighbor_area_norm"] = (
+                local_unknown_area_m2 / max_local_unknown_area
+            )
+            record["local_unknown_area_per_path_norm"] = (
+                local_unknown_per_path / max_local_unknown_per_path
+                if local_unknown_per_path is not None
+                else None
+            )
+            record["local_information_density_norm"] = (
+                density / max_density
+                if max_density > 1.0e-9
+                else 0.0
+            )
+
+        payload = {
+            "stamp_sec": int(msg.header.stamp.sec),
+            "stamp_nanosec": int(msg.header.stamp.nanosec),
+            "ros_time_ns": int(self.get_clock().now().nanoseconds),
+            "map_count": int(self.map_count),
+            "map_frame": str(msg.header.frame_id),
+            "resolution_m": float(msg.info.resolution),
+            "robot_frame": str(self.robot_frame),
+            "robot_pose_available": (
+                robot_x is not None
+                and robot_y is not None
+                and robot_yaw is not None
+            ),
+            "robot_x": robot_x,
+            "robot_y": robot_y,
+            "robot_yaw": robot_yaw,
+            "candidate_count": len(candidate_records),
+            "max_candidate_count": int(self.max_goals_to_publish),
+            "selection_policy": str(self.selection_policy),
+            "selection_mode": str(self.selection_mode),
+            "feature_notes": {
+                "local_unknown_neighbor_area_m2": (
+                    "Area of currently unknown cells immediately adjacent to "
+                    "the frontier cluster. This is a local descriptor, not "
+                    "actual future map gain."
+                ),
+                "normalisation": (
+                    "Most *_norm fields are normalised within the current "
+                    "candidate set, not across the whole map."
+                ),
+            },
+            "candidates": candidate_records,
+        }
+
+        msg_out = String()
+        msg_out.data = json.dumps(payload, sort_keys=True)
+        self.candidate_pub.publish(msg_out)
+
 
     def publish_frontier_grid(self, msg: OccupancyGrid, frontier_cells: Set[Cell]) -> None:
         data = np.zeros((msg.info.height, msg.info.width), dtype=np.int8)

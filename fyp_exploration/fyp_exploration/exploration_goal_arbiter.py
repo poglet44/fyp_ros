@@ -56,6 +56,16 @@ class ExplorationGoalArbiter(Node):
         super().__init__("exploration_goal_arbiter")
 
         # Inputs
+        # normal_goal_topic selects the non-recovery exploration goal source.
+        #
+        # Baseline mode:
+        #   normal_goal_topic: /selected_frontier_goal
+        #
+        # External/RL selector mode:
+        #   normal_goal_topic: /selected_frontier_goal_external
+        #
+        # frontier_goal_topic is kept for backwards compatibility.
+        self.declare_parameter("normal_goal_topic", "/selected_frontier_goal")
         self.declare_parameter("frontier_goal_topic", "/selected_frontier_goal")
         self.declare_parameter("frontier_path_topic", "/frontier_path")
         self.declare_parameter("exploration_grid_topic", "/exploration_grid")
@@ -92,7 +102,13 @@ class ExplorationGoalArbiter(Node):
         self.declare_parameter("prevent_diagonal_corner_cutting", True)
         self.declare_parameter("max_astar_expansions", 200000)
 
-        self.frontier_goal_topic = self.get_parameter("frontier_goal_topic").value
+        self.normal_goal_topic = self.get_parameter("normal_goal_topic").value
+
+        # Backwards compatibility:
+        # internally this is still named frontier_goal_topic, because the rest
+        # of the arbiter treats it as the normal non-recovery goal input.
+        self.frontier_goal_topic = self.normal_goal_topic
+
         self.frontier_path_topic = self.get_parameter("frontier_path_topic").value
         self.exploration_grid_topic = self.get_parameter("exploration_grid_topic").value
         self.supervisor_status_topic = self.get_parameter("supervisor_status_topic").value
@@ -164,6 +180,7 @@ class ExplorationGoalArbiter(Node):
 
         self.get_logger().info(
             "exploration_goal_arbiter started:\n"
+            f"  normal_goal_topic={self.normal_goal_topic}\n"
             f"  frontier_goal_topic={self.frontier_goal_topic}\n"
             f"  frontier_path_topic={self.frontier_path_topic}\n"
             f"  recovery_target_goal_topic={self.recovery_target_goal_topic}\n"
@@ -653,6 +670,8 @@ class ExplorationGoalArbiter(Node):
             "selected_goal_y": selected_goal.pose.position.y if selected_goal else None,
             "selected_path_pose_count": len(selected_path.poses) if selected_path else 0,
 
+            "normal_goal_topic": self.normal_goal_topic,
+            "frontier_goal_topic": self.frontier_goal_topic,
             "frontier_goal_available": self.latest_frontier_goal is not None,
             "frontier_path_available": self.latest_frontier_path is not None,
             "recovery_target_available": self.latest_recovery_target is not None,

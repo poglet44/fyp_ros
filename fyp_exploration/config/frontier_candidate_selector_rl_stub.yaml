@@ -1,0 +1,11 @@
+frontier_candidate_selector:
+  ros__parameters:
+    candidates_topic: /frontier_candidates
+    selected_goal_topic: /selected_frontier_goal_external
+    selected_path_topic: /selected_frontier_path_external
+    status_topic: /frontier_selector/status
+    selection_policy: rl_stub
+    max_candidate_age_s: 2.0
+    random_seed: 0
+    fixed_candidate_index: 0
+    max_rl_candidates: 10
