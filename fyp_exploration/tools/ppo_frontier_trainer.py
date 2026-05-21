@@ -550,6 +550,7 @@ def main():
     parser.add_argument("--model-dir", type=str, default="~/Sam/fyp_ws/logs/ppo_models")
     parser.add_argument("--save-name", type=str, default="ppo_frontier_smoke")
     parser.add_argument("--checkpoint-every", type=int, default=10)
+    parser.add_argument("--load-model", type=str, default="")
     args = parser.parse_args()
 
     model_dir = Path(args.model_dir).expanduser()
@@ -568,16 +569,26 @@ def main():
 
     env = FrontierPPOEnv(node)
 
-    model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        n_steps=16,
-        batch_size=16,
-        gamma=0.95,
-        learning_rate=3e-4,
-        device="auto",
-    )
+    load_model_path = Path(args.load_model).expanduser() if args.load_model else None
+
+    if load_model_path is not None and load_model_path.exists():
+        print(f"Loading existing PPO model: {load_model_path}", flush=True)
+        model = PPO.load(str(load_model_path), env=env, device="auto")
+    else:
+        if load_model_path is not None:
+            print(f"Requested load model does not exist yet: {load_model_path}", flush=True)
+            print("Starting a new PPO model.", flush=True)
+
+        model = PPO(
+            "MlpPolicy",
+            env,
+            verbose=1,
+            n_steps=16,
+            batch_size=16,
+            gamma=0.95,
+            learning_rate=3e-4,
+            device="auto",
+        )
 
     checkpoint_callback = CheckpointCallback(
         save_freq=max(1, int(args.checkpoint_every)),
@@ -591,6 +602,7 @@ def main():
         model.learn(
             total_timesteps=args.timesteps,
             callback=checkpoint_callback,
+            reset_num_timesteps=False,
         )
     except KeyboardInterrupt:
         print("\nTraining interrupted by user. Saving current PPO model...")
