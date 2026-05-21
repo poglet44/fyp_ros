@@ -1,0 +1,38 @@
+rl_training_env_stub:
+  ros__parameters:
+    candidates_topic: /frontier_candidates
+    exploration_grid_topic: /exploration_grid
+    supervisor_status_topic: /exploration_supervisor/status
+
+    selected_goal_topic: /selected_frontier_goal_external
+    selected_path_topic: /selected_frontier_path_external
+    status_topic: /rl_training_env_stub/status
+
+    map_frame: map
+    robot_frame: base_footprint
+    tf_lookup_timeout_s: 0.20
+
+    max_rl_candidates: 10
+    goal_reached_distance_m: 0.50
+    active_goal_match_radius_m: 1.00
+    max_action_duration_s: 120.0
+    min_action_timeout_s: 30.0
+    expected_navigation_speed_mps: 0.25
+    action_timeout_scale: 2.5
+    goal_invalid_grace_s: 1.0
+    min_action_duration_s: 15.0
+    min_goal_distance_reduction_m: 0.5   # Deprecated for poor-progress logic.
+    min_known_area_gain_m2: 1.0
+    min_robot_motion_m: 0.10
+    failed_goal_cooldown_s: 45.0
+    failed_goal_radius_m: 1.0
+    publish_rate_hz: 5.0
+
+    distance_penalty_lambda: 0.10
+    recovery_penalty: 2.0
+    timeout_penalty: 2.0
+    poor_progress_penalty: 2.0
+    invalid_action_penalty: 5.0
+
+    log_root_dir: ~/Sam/fyp_ws/logs/rl_training_stub
+    episode_name: manual_stub_episode

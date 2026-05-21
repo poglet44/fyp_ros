@@ -157,9 +157,9 @@ controller_server:
 
       critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
       BaseObstacle.scale: 0.04
-      PathAlign.scale: 24.0
+      PathAlign.scale: 30.0
       GoalAlign.scale: 14.0
-      PathDist.scale: 24.0
+      PathDist.scale: 36.0
       GoalDist.scale: 20.0
       RotateToGoal.scale: 16.0
       RotateToGoal.slowing_factor: 5.0

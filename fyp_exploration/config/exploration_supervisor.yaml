@@ -24,7 +24,7 @@ exploration_supervisor:
     checkpoint_min_candidates: 2
     checkpoint_min_spacing_m: 1.5
     max_checkpoints: 20
-    recovery_progress_fractions: [0.75, 0.50, 0.25]
+    recovery_progress_fractions: [0.90, 0.75, 0.55]
     checkpoint_min_return_distance_m: 1.0
 
     executor_goal_reached_reason: goal_reached
