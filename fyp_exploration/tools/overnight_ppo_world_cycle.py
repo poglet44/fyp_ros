@@ -27,6 +27,12 @@ def main():
     parser.add_argument("--save-name", type=str, default="ppo_frontier_overnight_001")
     parser.add_argument("--checkpoint-every", type=int, default=16)
     parser.add_argument("--model-dir", type=str, default="~/Sam/fyp_ws/logs/ppo_models")
+    parser.add_argument(
+        "--stop-file",
+        type=str,
+        default="~/Sam/fyp_ws/logs/ppo_stop_after_current_world",
+        help="Create this file to stop after the current world run finishes.",
+    )
     args = parser.parse_args()
 
     home = Path.home()
@@ -36,6 +42,7 @@ def main():
     model_dir = Path(args.model_dir).expanduser()
     model_dir.mkdir(parents=True, exist_ok=True)
     model_path = model_dir / f"{args.save_name}.zip"
+    stop_file = Path(args.stop_file).expanduser()
 
     base_env = os.environ.copy()
     base_env["HEADLESS"] = "1"
@@ -48,6 +55,9 @@ def main():
     print("[MANAGER] Model path:", model_path)
     print("[MANAGER] Rosbags disabled.")
     print("[MANAGER] RViz disabled.")
+    print("[MANAGER] Stop file:", stop_file)
+    print("[MANAGER] To stop gracefully after the current world, run:")
+    print(f"  touch {stop_file}")
 
     try:
         for cycle in range(args.cycles):
@@ -88,6 +98,10 @@ def main():
                 cleanup_env["CLEANUP_ONLY"] = "1"
                 run([str(stack_script)], env=cleanup_env, check=False)
                 time.sleep(5.0)
+
+                if stop_file.exists():
+                    print("[MANAGER] Stop file detected. Exiting after completed world run.")
+                    return
 
     except KeyboardInterrupt:
         print("\n[MANAGER] Interrupted. Cleaning stack...")
