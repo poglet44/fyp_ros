@@ -14,6 +14,8 @@ import rclpy
 from gymnasium import spaces
 from rclpy.node import Node
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import CheckpointCallback
 from std_msgs.msg import Int32, String
 
 
@@ -89,6 +91,9 @@ class FrontierPPOEnv(gym.Env):
         soft_loop_window: int = 3,
         soft_loop_min_distance_m: float = 10.0,
         soft_loop_max_gain_m2: float = 2.0,
+        bad_action_min_duration_s: float = 60.0,
+        bad_action_min_distance_m: float = 5.0,
+        bad_action_max_gain_m2: float = 3.0,
     ):
         super().__init__()
 
@@ -103,6 +108,10 @@ class FrontierPPOEnv(gym.Env):
         self.soft_loop_window = int(soft_loop_window)
         self.soft_loop_min_distance_m = float(soft_loop_min_distance_m)
         self.soft_loop_max_gain_m2 = float(soft_loop_max_gain_m2)
+
+        self.bad_action_min_duration_s = float(bad_action_min_duration_s)
+        self.bad_action_min_distance_m = float(bad_action_min_distance_m)
+        self.bad_action_max_gain_m2 = float(bad_action_max_gain_m2)
 
         self.max_rl_candidates = 10
         self.feature_count = 12
@@ -135,6 +144,7 @@ class FrontierPPOEnv(gym.Env):
             self.last_transition_count = int(status.get("transition_count", 0))
             self.last_log_dir = status.get("log_dir")
 
+        print("[PPO_ENV] reset complete", flush=True)
         return obs, {}
 
     def step(self, action):
@@ -143,7 +153,87 @@ class FrontierPPOEnv(gym.Env):
         status_before = self.wait_for_status(timeout_s=10.0)
         transition_before = int(status_before.get("transition_count", 0))
 
-        self.ros_node.publish_action(action)
+        # Check the latest valid action mask before publishing.
+        # Plain SB3 PPO does not natively support action masks, so it may choose
+        # padded actions. Those should be treated as invalid policy actions, not
+        # sent to the robot.
+        payload = self.ros_node.get_observation_payload()
+        valid_action_mask = []
+        if payload is not None:
+            valid_action_mask = payload.get("valid_action_mask", [])
+
+        action_valid = (
+            0 <= action < len(valid_action_mask)
+            and int(valid_action_mask[action]) == 1
+        )
+
+        if not action_valid:
+            print(
+                f"[PPO_ENV] invalid padded action={action}, "
+                f"valid_action_mask={valid_action_mask}; penalising without publishing.",
+                flush=True,
+            )
+            obs = self.get_current_or_zero_observation()
+            info = {
+                "published_action": action,
+                "terminal_reason": "",
+                "end_reason": "invalid_padded_action",
+            }
+            return obs, -5.0, False, False, info
+
+        print(f"[PPO_ENV] step received action={action}", flush=True)
+
+        accepted = False
+        accept_start = time.time()
+        publish_count = 0
+
+        while time.time() - accept_start < 5.0:
+            status_check = self.ros_node.get_status() or {}
+
+            if bool(status_check.get("active_action", False)):
+                accepted = True
+                break
+
+            if status_check.get("supervisor_state", "") != "EXPLORING":
+                print(
+                    "[PPO_ENV] action not sent because supervisor is not EXPLORING: "
+                    f"{status_check.get('supervisor_state')}",
+                    flush=True,
+                )
+                break
+
+            if not bool(status_check.get("pending_observation_available", False)):
+                print(
+                    "[PPO_ENV] waiting for pending observation before sending action",
+                    flush=True,
+                )
+                time.sleep(0.1)
+                continue
+
+            self.ros_node.publish_action(action)
+            publish_count += 1
+            print(
+                f"[PPO_ENV] published action={action}, attempt={publish_count}",
+                flush=True,
+            )
+            time.sleep(0.2)
+
+        if not accepted:
+            status_check = self.ros_node.get_status() or {}
+            print(
+                "[PPO_ENV] action was not accepted after repeated publishing. "
+                f"active_action={status_check.get('active_action')}, "
+                f"pending_observation_available={status_check.get('pending_observation_available')}, "
+                f"supervisor_state={status_check.get('supervisor_state')}",
+                flush=True,
+            )
+            obs = self.get_current_or_zero_observation()
+            info = {
+                "published_action": action,
+                "terminal_reason": "action_not_accepted",
+                "end_reason": "action_not_accepted",
+            }
+            return obs, -5.0, False, True, info
 
         step_start = time.time()
         reward = 0.0
@@ -179,6 +269,10 @@ class FrontierPPOEnv(gym.Env):
                 break
 
             if transition_now > transition_before:
+                print(
+                    f"[PPO_ENV] transition completed: before={transition_before}, now={transition_now}",
+                    flush=True,
+                )
                 row = self.read_latest_transition_row(status)
                 if row is not None:
                     reward = float(row.get("reward", 0.0))
@@ -187,6 +281,16 @@ class FrontierPPOEnv(gym.Env):
                         "known_area_delta_m2": row.get("known_area_delta_m2", ""),
                         "distance_travelled_m": row.get("distance_travelled_m", ""),
                     })
+
+                if row is not None and self.check_single_bad_action(row):
+                    truncated = True
+                    info["terminal_reason"] = "single_bad_action_detected"
+                    print(
+                        "[PPO_ENV] single bad action detected; truncating episode. "
+                        f"row={row}",
+                        flush=True,
+                    )
+                    break
 
                 soft_loop = self.check_soft_loop(status)
                 if soft_loop:
@@ -197,6 +301,7 @@ class FrontierPPOEnv(gym.Env):
                 break
 
             if now - step_start > self.action_completion_timeout_s:
+                print("[PPO_ENV] action completion timeout", flush=True)
                 truncated = True
                 info["terminal_reason"] = "action_completion_timeout"
                 reward = -5.0
@@ -338,6 +443,31 @@ class FrontierPPOEnv(gym.Env):
         except (TypeError, ValueError):
             return 0.0
 
+    def check_single_bad_action(self, row: Dict[str, str]) -> bool:
+        """
+        Detect one clearly inefficient selected frontier action.
+
+        This does not punish normal terminal recovery-to-start behaviour.
+        It only checks the completed RL-selected action row.
+        """
+        end_reason = str(row.get("end_reason", ""))
+
+        if end_reason not in {"recovery_triggered", "goal_timeout"}:
+            return False
+
+        try:
+            duration_s = float(row.get("duration_s", 0.0))
+            known_gain_m2 = float(row.get("known_area_delta_m2", 0.0))
+            distance_m = float(row.get("distance_travelled_m", 0.0))
+        except (TypeError, ValueError):
+            return False
+
+        return (
+            duration_s >= self.bad_action_min_duration_s
+            and distance_m >= self.bad_action_min_distance_m
+            and known_gain_m2 <= self.bad_action_max_gain_m2
+        )
+
     def check_soft_loop(self, status: Dict) -> bool:
         log_dir = status.get("log_dir")
         if not log_dir:
@@ -374,6 +504,42 @@ class FrontierPPOEnv(gym.Env):
         )
 
 
+def wait_for_active_action_to_finish(
+    node: ROSFrontierTrainingNode,
+    timeout_s: float = 180.0,
+) -> None:
+    start = time.time()
+
+    while time.time() - start < timeout_s:
+        status = node.get_status()
+
+        if status is None:
+            time.sleep(0.2)
+            continue
+
+        active_action = bool(status.get("active_action", False))
+        supervisor_state = str(status.get("supervisor_state", ""))
+
+        if not active_action:
+            print("[PPO_TRAINER] No active action. Safe to exit.", flush=True)
+            return
+
+        print(
+            "[PPO_TRAINER] Waiting for active robot action to finish before exit... "
+            f"active_action={active_action}, "
+            f"supervisor_state={supervisor_state}, "
+            f"transition_count={status.get('transition_count')}",
+            flush=True,
+        )
+        time.sleep(2.0)
+
+    print(
+        "[PPO_TRAINER] Timed out waiting for active action to finish. "
+        "Saving anyway; robot stack may continue executing the last goal.",
+        flush=True,
+    )
+
+
 def spin_ros(node: Node):
     rclpy.spin(node)
 
@@ -383,7 +549,16 @@ def main():
     parser.add_argument("--timesteps", type=int, default=200)
     parser.add_argument("--model-dir", type=str, default="~/Sam/fyp_ws/logs/ppo_models")
     parser.add_argument("--save-name", type=str, default="ppo_frontier_smoke")
+    parser.add_argument("--checkpoint-every", type=int, default=10)
     args = parser.parse_args()
+
+    model_dir = Path(args.model_dir).expanduser()
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    checkpoint_dir = model_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    save_path = model_dir / args.save_name
 
     rclpy.init()
 
@@ -404,17 +579,30 @@ def main():
         device="auto",
     )
 
-    model.learn(total_timesteps=args.timesteps)
+    checkpoint_callback = CheckpointCallback(
+        save_freq=max(1, int(args.checkpoint_every)),
+        save_path=str(checkpoint_dir),
+        name_prefix=args.save_name,
+        save_replay_buffer=False,
+        save_vecnormalize=False,
+    )
 
-    model_dir = Path(args.model_dir).expanduser()
-    model_dir.mkdir(parents=True, exist_ok=True)
-    save_path = model_dir / args.save_name
-    model.save(str(save_path))
+    try:
+        model.learn(
+            total_timesteps=args.timesteps,
+            callback=checkpoint_callback,
+        )
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user. Saving current PPO model...")
+    finally:
+        wait_for_active_action_to_finish(node, timeout_s=180.0)
 
-    print(f"Saved PPO model to: {save_path}.zip")
+        model.save(str(save_path))
+        print(f"Saved PPO model to: {save_path}.zip")
+        print(f"Periodic checkpoints directory: {checkpoint_dir}")
 
-    node.destroy_node()
-    rclpy.shutdown()
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":
