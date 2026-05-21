@@ -25,15 +25,18 @@ class ROSFrontierTrainingNode(Node):
 
         self.observation_topic = "/rl_training_env_stub/observation"
         self.status_topic = "/rl_training_env_stub/status"
+        self.arbiter_status_topic = "/exploration_goal_arbiter/status"
         self.action_topic = "/rl_training_env_stub/action"
 
         self.action_pub = self.create_publisher(Int32, self.action_topic, 10)
         self.create_subscription(String, self.observation_topic, self.observation_callback, 10)
         self.create_subscription(String, self.status_topic, self.status_callback, 10)
+        self.create_subscription(String, self.arbiter_status_topic, self.arbiter_status_callback, 10)
 
         self.lock = threading.Lock()
         self.latest_observation_payload: Optional[Dict] = None
         self.latest_status: Optional[Dict] = None
+        self.latest_arbiter_status: Optional[Dict] = None
         self.last_observation_time_wall = 0.0
         self.last_status_time_wall = 0.0
 
@@ -59,6 +62,16 @@ class ROSFrontierTrainingNode(Node):
             self.latest_status = payload
             self.last_status_time_wall = time.time()
 
+    def arbiter_status_callback(self, msg: String) -> None:
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn("Invalid arbiter status JSON.")
+            return
+
+        with self.lock:
+            self.latest_arbiter_status = payload
+
     def get_observation_payload(self) -> Optional[Dict]:
         with self.lock:
             return self.latest_observation_payload.copy() if self.latest_observation_payload else None
@@ -66,6 +79,10 @@ class ROSFrontierTrainingNode(Node):
     def get_status(self) -> Optional[Dict]:
         with self.lock:
             return self.latest_status.copy() if self.latest_status else None
+
+    def get_arbiter_status(self) -> Optional[Dict]:
+        with self.lock:
+            return self.latest_arbiter_status.copy() if self.latest_arbiter_status else None
 
     def get_wall_times(self) -> Tuple[float, float]:
         with self.lock:
@@ -127,6 +144,7 @@ class FrontierPPOEnv(gym.Env):
 
         self.episode_start_wall = None
         self.recovery_start_wall = None
+        self.recovery_astar_failure_start_wall = None
         self.last_transition_count = 0
         self.last_log_dir = None
         self.last_transition_row_index = -1
@@ -136,6 +154,7 @@ class FrontierPPOEnv(gym.Env):
 
         self.episode_start_wall = time.time()
         self.recovery_start_wall = None
+        self.recovery_astar_failure_start_wall = None
 
         obs = self.wait_for_observation(timeout_s=30.0)
         status = self.ros_node.get_status()
@@ -190,6 +209,28 @@ class FrontierPPOEnv(gym.Env):
         while time.time() - accept_start < 5.0:
             status_check = self.ros_node.get_status() or {}
 
+            transition_now = int(status_check.get("transition_count", transition_before))
+            if transition_now > transition_before and not bool(status_check.get("active_action", False)):
+                row = self.read_latest_transition_row(status_check)
+                reward = self.read_latest_reward(status_check)
+                end_reason = row.get("end_reason", "action_rejected") if row is not None else "action_rejected"
+
+                print(
+                    "[PPO_ENV] action was rejected by RL stub. "
+                    f"transition_before={transition_before}, "
+                    f"transition_now={transition_now}, "
+                    f"end_reason={end_reason}",
+                    flush=True,
+                )
+
+                obs = self.get_current_or_zero_observation()
+                info = {
+                    "published_action": action,
+                    "terminal_reason": "",
+                    "end_reason": end_reason,
+                }
+                return obs, reward, False, False, info
+
             if bool(status_check.get("active_action", False)):
                 accepted = True
                 break
@@ -209,6 +250,28 @@ class FrontierPPOEnv(gym.Env):
                 )
                 time.sleep(0.1)
                 continue
+
+            current_payload = self.ros_node.get_observation_payload()
+            current_mask = current_payload.get("valid_action_mask", []) if current_payload is not None else []
+
+            current_action_valid = (
+                0 <= action < len(current_mask)
+                and int(current_mask[action]) == 1
+            )
+
+            if not current_action_valid:
+                print(
+                    f"[PPO_ENV] action={action} became invalid before publish, "
+                    f"current_valid_action_mask={current_mask}; penalising without publishing.",
+                    flush=True,
+                )
+                obs = self.get_current_or_zero_observation()
+                info = {
+                    "published_action": action,
+                    "terminal_reason": "",
+                    "end_reason": "invalid_padded_action",
+                }
+                return obs, -5.0, False, False, info
 
             self.ros_node.publish_action(action)
             publish_count += 1
@@ -408,6 +471,25 @@ class FrontierPPOEnv(gym.Env):
                 return False, True, "recovery_stuck_timeout"
         else:
             self.recovery_start_wall = None
+
+        arbiter_status = self.ros_node.get_arbiter_status()
+        if arbiter_status is not None:
+            arbiter_reason = str(arbiter_status.get("reason", ""))
+            arbiter_mode = str(arbiter_status.get("mode", ""))
+
+            recovery_astar_failed = (
+                supervisor_state in {"RECOVERY_CHECKPOINT", "RECOVERY_RETURN_START"}
+                and arbiter_mode == "no_valid_output"
+                and arbiter_reason == "recovery_requested_but_astar_failed"
+            )
+
+            if recovery_astar_failed:
+                if self.recovery_astar_failure_start_wall is None:
+                    self.recovery_astar_failure_start_wall = now
+                elif now - self.recovery_astar_failure_start_wall > 10.0:
+                    return False, True, "recovery_astar_failed"
+            else:
+                self.recovery_astar_failure_start_wall = None
 
         return None
 
