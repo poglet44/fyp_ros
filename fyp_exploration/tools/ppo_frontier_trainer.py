@@ -169,6 +169,16 @@ class FrontierPPOEnv(gym.Env):
     def step(self, action):
         action = int(action)
 
+        terminated_wait, truncated_wait, wait_reason = self.wait_until_exploring_or_terminal()
+        if terminated_wait or truncated_wait:
+            obs = self.get_current_or_zero_observation()
+            info = {
+                "published_action": action,
+                "terminal_reason": wait_reason,
+                "end_reason": wait_reason,
+            }
+            return obs, 0.0, terminated_wait, truncated_wait, info
+
         status_before = self.wait_for_status(timeout_s=10.0)
         transition_before = int(status_before.get("transition_count", 0))
 
@@ -237,11 +247,21 @@ class FrontierPPOEnv(gym.Env):
 
             if status_check.get("supervisor_state", "") != "EXPLORING":
                 print(
-                    "[PPO_ENV] action not sent because supervisor is not EXPLORING: "
-                    f"{status_check.get('supervisor_state')}",
+                    "[PPO_ENV] Supervisor left EXPLORING before action was accepted; "
+                    "waiting instead of penalising policy. "
+                    f"supervisor_state={status_check.get('supervisor_state')}",
                     flush=True,
                 )
-                break
+                terminated_wait, truncated_wait, wait_reason = self.wait_until_exploring_or_terminal()
+                if terminated_wait or truncated_wait:
+                    obs = self.get_current_or_zero_observation()
+                    info = {
+                        "published_action": action,
+                        "terminal_reason": wait_reason,
+                        "end_reason": wait_reason,
+                    }
+                    return obs, 0.0, terminated_wait, truncated_wait, info
+                continue
 
             if not bool(status_check.get("pending_observation_available", False)):
                 print(
@@ -372,6 +392,35 @@ class FrontierPPOEnv(gym.Env):
 
         obs = self.get_current_or_zero_observation()
         return obs, reward, terminated, truncated, info
+
+    def wait_until_exploring_or_terminal(self) -> tuple[bool, bool, str]:
+        """
+        PPO should not choose actions while the exploration supervisor is in
+        recovery. Wait until EXPLORING resumes, or return a terminal/truncated
+        condition if recovery/terminal handling says the episode is over.
+        """
+        while True:
+            status = self.wait_for_status(timeout_s=2.0)
+
+            if not status:
+                return False, True, "status_timeout_before_action"
+
+            terminal_check = self.check_episode_terminal(status=status)
+            if terminal_check is not None:
+                terminated, truncated, reason = terminal_check
+                return terminated, truncated, reason
+
+            supervisor_state = str(status.get("supervisor_state", ""))
+
+            if supervisor_state == "EXPLORING":
+                return False, False, ""
+
+            print(
+                "[PPO_ENV] Waiting through supervisor recovery before selecting action. "
+                f"supervisor_state={supervisor_state}",
+                flush=True,
+            )
+            time.sleep(1.0)
 
     def wait_for_observation(self, timeout_s: float) -> np.ndarray:
         start = time.time()
