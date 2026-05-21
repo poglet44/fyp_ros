@@ -1,5 +1,7 @@
 rl_training_env_stub:
   ros__parameters:
+    policy_mode: external		# Options: nearest, external
+    external_action_timeout_s: 5.0
     candidates_topic: /frontier_candidates
     exploration_grid_topic: /exploration_grid
     supervisor_status_topic: /exploration_supervisor/status

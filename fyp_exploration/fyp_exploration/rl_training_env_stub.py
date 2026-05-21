@@ -13,7 +13,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import OccupancyGrid, Path as NavPath
 from rclpy.duration import Duration
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Int32, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
@@ -65,6 +65,8 @@ class RLTrainingEnvStub(Node):
         self.declare_parameter("selected_goal_topic", "/selected_frontier_goal_external")
         self.declare_parameter("selected_path_topic", "/selected_frontier_path_external")
         self.declare_parameter("status_topic", "/rl_training_env_stub/status")
+        self.declare_parameter("observation_topic", "/rl_training_env_stub/observation")
+        self.declare_parameter("action_topic", "/rl_training_env_stub/action")
 
         # Frames
         self.declare_parameter("map_frame", "map")
@@ -87,6 +89,8 @@ class RLTrainingEnvStub(Node):
         self.declare_parameter("failed_goal_cooldown_s", 45.0)
         self.declare_parameter("failed_goal_radius_m", 1.0)
         self.declare_parameter("publish_rate_hz", 5.0)
+        self.declare_parameter("policy_mode", "nearest")  # nearest or external
+        self.declare_parameter("external_action_timeout_s", 5.0)
 
         # Reward
         self.declare_parameter("distance_penalty_lambda", 0.10)
@@ -105,6 +109,8 @@ class RLTrainingEnvStub(Node):
         self.selected_goal_topic = str(self.get_parameter("selected_goal_topic").value)
         self.selected_path_topic = str(self.get_parameter("selected_path_topic").value)
         self.status_topic = str(self.get_parameter("status_topic").value)
+        self.observation_topic = str(self.get_parameter("observation_topic").value)
+        self.action_topic = str(self.get_parameter("action_topic").value)
 
         self.map_frame = str(self.get_parameter("map_frame").value)
         self.robot_frame = str(self.get_parameter("robot_frame").value)
@@ -127,6 +133,11 @@ class RLTrainingEnvStub(Node):
         self.failed_goal_cooldown_s = float(self.get_parameter("failed_goal_cooldown_s").value)
         self.failed_goal_radius_m = float(self.get_parameter("failed_goal_radius_m").value)
         self.publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
+        self.policy_mode = str(self.get_parameter("policy_mode").value).strip().lower()
+        self.external_action_timeout_s = float(self.get_parameter("external_action_timeout_s").value)
+
+        if self.policy_mode not in {"nearest", "external"}:
+            raise ValueError(f"Unsupported policy_mode={self.policy_mode!r}. Use nearest or external.")
 
         self.distance_penalty_lambda = float(self.get_parameter("distance_penalty_lambda").value)
         self.recovery_penalty = float(self.get_parameter("recovery_penalty").value)
@@ -143,10 +154,12 @@ class RLTrainingEnvStub(Node):
         self.create_subscription(String, self.candidates_topic, self.candidates_callback, 10)
         self.create_subscription(OccupancyGrid, self.exploration_grid_topic, self.grid_callback, 10)
         self.create_subscription(String, self.supervisor_status_topic, self.supervisor_status_callback, 10)
+        self.create_subscription(Int32, self.action_topic, self.action_callback, 10)
 
         self.selected_goal_pub = self.create_publisher(PoseStamped, self.selected_goal_topic, 10)
         self.selected_path_pub = self.create_publisher(NavPath, self.selected_path_topic, 10)
         self.status_pub = self.create_publisher(String, self.status_topic, 10)
+        self.observation_pub = self.create_publisher(String, self.observation_topic, 10)
 
         timer_period = 1.0 / max(self.publish_rate_hz, 0.1)
         self.timer = self.create_timer(timer_period, self.timer_callback)
@@ -172,6 +185,12 @@ class RLTrainingEnvStub(Node):
         self.action_distance_m = 0.0
         self.active_candidate_invalid_since_s: Optional[float] = None
 
+        self.pending_observation: Optional[List[List[float]]] = None
+        self.pending_valid_action_mask: List[int] = []
+        self.pending_preselected: List[Dict[str, Any]] = []
+        self.pending_observation_time_s: Optional[float] = None
+        self.pending_observation_id = 0
+
         self.transition_count = 0
         self.failed_goal_cooldowns: List[Dict[str, Any]] = []
 
@@ -181,6 +200,9 @@ class RLTrainingEnvStub(Node):
         self.get_logger().info(f"Publishing selected goal: {self.selected_goal_topic}")
         self.get_logger().info(f"Publishing selected path: {self.selected_path_topic}")
         self.get_logger().info(f"Logging transitions to: {self.transitions_csv_path}")
+        self.get_logger().info(f"Policy mode: {self.policy_mode}")
+        self.get_logger().info(f"Publishing observations: {self.observation_topic}")
+        self.get_logger().info(f"Listening for actions: {self.action_topic}")
 
     def setup_logging(self) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -256,32 +278,154 @@ class RLTrainingEnvStub(Node):
         supervisor_state = str(self.latest_supervisor_status.get("state", ""))
 
         if supervisor_state != "EXPLORING":
+            self.clear_pending_observation()
             return
 
         candidates = self.latest_candidates_payload.get("candidates", [])
         if not isinstance(candidates, list) or not candidates:
+            self.clear_pending_observation()
             return
 
         preselected = self.preselect_rl_candidates(candidates)
         valid_action_mask = [1] * len(preselected) + [0] * max(0, self.max_rl_candidates - len(preselected))
 
         if not preselected:
+            self.clear_pending_observation()
             return
 
         observation = self.build_rl_observation(preselected)
 
-        # Dummy policy for transition validation:
-        # choose nearest candidate from the RL preselected set.
-        action_index = self.choose_nearest_action(preselected)
+        if self.policy_mode == "nearest":
+            action_index = self.choose_nearest_action(preselected)
 
-        if action_index is None or action_index >= len(preselected):
-            self.log_invalid_action(
+            if action_index is None or action_index >= len(preselected):
+                self.log_invalid_action(
+                    observation=observation,
+                    valid_action_mask=valid_action_mask,
+                    action_index=-1 if action_index is None else action_index,
+                )
+                return
+
+            self.start_action_from_selection(
+                action_index=action_index,
+                preselected=preselected,
                 observation=observation,
                 valid_action_mask=valid_action_mask,
-                action_index=-1 if action_index is None else action_index,
             )
             return
 
+        # External PPO/controller mode:
+        # publish observation and wait for /rl_training_env_stub/action.
+        self.set_pending_observation(
+            observation=observation,
+            valid_action_mask=valid_action_mask,
+            preselected=preselected,
+        )
+
+    def set_pending_observation(
+        self,
+        observation: List[List[float]],
+        valid_action_mask: List[int],
+        preselected: List[Dict[str, Any]],
+    ) -> None:
+        now_s = self.now_seconds()
+
+        self.pending_observation = observation
+        self.pending_valid_action_mask = valid_action_mask
+        self.pending_preselected = preselected
+        self.pending_observation_time_s = now_s
+        self.pending_observation_id += 1
+
+        msg = String()
+        msg.data = json.dumps(
+            {
+                "observation_id": self.pending_observation_id,
+                "transition_index": self.transition_count,
+                "time_s": now_s,
+                "feature_keys": self.RL_FEATURE_KEYS,
+                "observation": observation,
+                "valid_action_mask": valid_action_mask,
+                "preselected_candidate_indices": [
+                    int(candidate.get("candidate_index", -1))
+                    for candidate in preselected
+                ],
+                "max_rl_candidates": self.max_rl_candidates,
+                "policy_mode": self.policy_mode,
+            },
+            sort_keys=True,
+        )
+        self.observation_pub.publish(msg)
+
+    def clear_pending_observation(self) -> None:
+        self.pending_observation = None
+        self.pending_valid_action_mask = []
+        self.pending_preselected = []
+        self.pending_observation_time_s = None
+
+    def action_callback(self, msg: Int32) -> None:
+        if self.policy_mode != "external":
+            return
+
+        if self.active_action:
+            return
+
+        if self.pending_observation is None or not self.pending_preselected:
+            return
+
+        supervisor_state = str(self.latest_supervisor_status.get("state", ""))
+        if supervisor_state != "EXPLORING":
+            self.clear_pending_observation()
+            return
+
+        now_s = self.now_seconds()
+
+        if (
+            self.pending_observation_time_s is not None
+            and now_s - self.pending_observation_time_s > self.external_action_timeout_s
+        ):
+            self.log_invalid_action(
+                observation=self.pending_observation,
+                valid_action_mask=self.pending_valid_action_mask,
+                action_index=int(msg.data),
+            )
+            self.clear_pending_observation()
+            return
+
+        action_index = int(msg.data)
+
+        if action_index < 0 or action_index >= len(self.pending_preselected):
+            self.log_invalid_action(
+                observation=self.pending_observation,
+                valid_action_mask=self.pending_valid_action_mask,
+                action_index=action_index,
+            )
+            self.clear_pending_observation()
+            return
+
+        if action_index >= len(self.pending_valid_action_mask) or self.pending_valid_action_mask[action_index] != 1:
+            self.log_invalid_action(
+                observation=self.pending_observation,
+                valid_action_mask=self.pending_valid_action_mask,
+                action_index=action_index,
+            )
+            self.clear_pending_observation()
+            return
+
+        self.start_action_from_selection(
+            action_index=action_index,
+            preselected=self.pending_preselected,
+            observation=self.pending_observation,
+            valid_action_mask=self.pending_valid_action_mask,
+        )
+        self.clear_pending_observation()
+
+    def start_action_from_selection(
+        self,
+        action_index: int,
+        preselected: List[Dict[str, Any]],
+        observation: List[List[float]],
+        valid_action_mask: List[int],
+    ) -> None:
         selected_candidate = preselected[action_index]
 
         goal = self.candidate_to_pose_stamped(self.latest_candidates_payload, selected_candidate)
@@ -309,6 +453,7 @@ class RLTrainingEnvStub(Node):
         self.last_robot_xy = robot_xy
         self.action_distance_m = 0.0
         self.active_candidate_invalid_since_s = None
+        self.clear_pending_observation()
 
         self.write_observation_jsonl(
             observation=observation,
@@ -1101,6 +1246,11 @@ class RLTrainingEnvStub(Node):
             "goal_invalid_grace_s": self.goal_invalid_grace_s,
             "active_goal_match_radius_m": self.active_goal_match_radius_m,
             "active_candidate_invalid_since_s": self.active_candidate_invalid_since_s,
+            "policy_mode": self.policy_mode,
+            "pending_observation_available": self.pending_observation is not None,
+            "pending_observation_id": self.pending_observation_id,
+            "observation_topic": self.observation_topic,
+            "action_topic": self.action_topic,
             "reward_formula": "known_area_delta_m2 - lambda_distance * distance_m - failure_penalty",
             "distance_penalty_lambda": self.distance_penalty_lambda,
             "log_dir": str(self.run_dir),
